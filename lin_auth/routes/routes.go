@@ -1,0 +1,10 @@
+package routes
+
+import (
+	"github.com/gofiber/fiber/v3"
+	"github.com/lin_auth/controllers"
+)
+
+func Setup(app *fiber.App){
+	app.Post("/api/register", controllers.Register)
+}

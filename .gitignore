@@ -1,0 +1,9 @@
+docker-compose.yaml
+docker-compose.yml
+
+.vscode
+
+node_modules/
+
+/lin_server/migrations/
+/lin_server/target

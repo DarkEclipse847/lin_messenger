@@ -9,15 +9,15 @@ import (
 	"gorm.io/gorm"
 )
 
-func Connect() *gorm.DB{
+func Connect() *gorm.DB {
 	connection, err := gorm.Open(postgres.Open(os.Getenv("DATABASE_URL")), &gorm.Config{})
-
 	if err != nil {
 		log.Fatal().Msg(err.Error())
 	}
 
-	connection.AutoMigrate(&models.User{})
-
+	if err := connection.AutoMigrate(&models.User{}, &models.AuthCreds{}); err != nil {
+		log.Fatal().Msg(err.Error())
+	}
 
 	return connection
 }

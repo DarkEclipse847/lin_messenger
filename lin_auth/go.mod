@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/alexedwards/argon2id v1.0.0 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/gofiber/fiber v1.14.6 // indirect
 	github.com/gofiber/fiber/v3 v3.1.0 // indirect
 	github.com/gofiber/schema v1.7.0 // indirect
@@ -25,11 +26,13 @@ require (
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/rabbitmq/amqp091-go v1.10.0 // indirect
+	github.com/redis/go-redis/v9 v9.21.0 // indirect
 	github.com/rs/zerolog v1.34.0 // indirect
 	github.com/tinylib/msgp v1.6.3 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.69.0 // indirect
 	github.com/valyala/tcplisten v0.0.0-20161114210144-ceec8f93295a // indirect
+	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/crypto v0.48.0 // indirect
 	golang.org/x/net v0.50.0 // indirect
 	golang.org/x/oauth2 v0.27.0 // indirect

@@ -2,6 +2,7 @@
 package utils
 
 import (
+	"errors"
 	"os"
 	"time"
 
@@ -12,7 +13,7 @@ func GenerateToken(id int64, lifetime int64) (string, error) {
 	token, err:= jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"user_id": id,
 		"exp": lifetime,
-	}).SignedString(os.Getenv("JWT_SECRET"))
+	}).SignedString([]byte(os.Getenv("JWT_SECRET")))
 
 	if err != nil {
 		return "", err
@@ -21,14 +22,30 @@ func GenerateToken(id int64, lifetime int64) (string, error) {
 	return token, err;
 }
 
-func VerifyToken (token string) (bool, error){
-	result, err := jwt.Parse(token, func(result *jwt.Token) (interface{}, error){
-		return []byte(os.Getenv("JWT_SECRET")), nil
-	})
-	if err != nil{
-		return false, err
-	}
-	return result.Valid, nil
+//func VerifyToken (token string) (bool, error){
+//	result, err := jwt.Parse(token, func(result *jwt.Token) (interface{}, error){
+//		return []byte(os.Getenv("JWT_SECRET")), nil
+//	})
+//	if err != nil{
+//		return false, err
+//	}
+//	return result.Valid, nil
+//}
+
+func ValidateToken(token string) (*jwt.Token, error) {
+    result, err := jwt.Parse(token, func(t *jwt.Token) (interface{}, error) {
+        if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+            return nil, errors.New("unexpected signing method")
+        }
+        return []byte(os.Getenv("JWT_SECRET")), nil
+    })
+    if err != nil {
+        return nil, err
+    }
+    if !result.Valid {
+        return nil, errors.New("invalid token")
+    }
+    return result, nil
 }
 
 func GenerateTokenPair(id int64) (string, string, error) {

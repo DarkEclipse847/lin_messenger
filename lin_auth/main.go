@@ -8,14 +8,11 @@ import (
 )
 
 func main() {
-	//db connection
-	database.Connect()
+	db := database.Connect()
 
-	//Logging init
-	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix;
+	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 
-	//Fiber init
-	app := fiber.New();
-	routes.Setup(app)
+	app := fiber.New()
+	routes.Setup(app, db)
 	app.Listen(":8000")
 }

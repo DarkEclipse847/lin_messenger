@@ -28,7 +28,7 @@ pub struct User {
 pub struct Chat {
     pub id: i64,
     pub title: String,
-    // Option is bacause that it's joinable, so generated schema do not let me set strict
+    // I use Option because that it's joinable, so generated schema do not let me set strict
     // i64, i'll need to change that later, or stick with it
     pub admin: Option<i64>,
     pub chat_img: Option<String>,

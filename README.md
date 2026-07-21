@@ -12,6 +12,22 @@
 
 ### Approximate progress on alpha(0.1) version:
 
-- 🔐 lin_auth (Authentification service) - ![Progress](https://progress-bar.xyz/60)
+- 🔐 lin_auth (Authentification service) - ![Progress](https://progress-bar.xyz/64)
 - 🖧 lin_server (Actix websocket server) - ![Progress](https://progress-bar.xyz/30)
 - 🔥 lin_client (Crossplatform Tauri client app) - ![Progress](https://progress-bar.xyz/0)
+
+### Global TODOs:
+
+- [ ] Consider changing ID generation logic to UUIDs for safety measures
+- [ ] Add tests
+- [ ] Create CI/CD pipeline after adding tests
+- [ ] Build notification service(or look for completed solution)
+- [ ] Build client side lmao
+- [x] Chatroom creation
+- [x] Token based access to user????
+- [ ] Create connection with S3 storage
+
+### Global notes and materials:
+
+- [Chat App driven by WebSockets(could use some architecture patterns from this)](https://medium.com/@edhalliwell/chat-app-driven-by-websockets-using-socket-io-and-typescript-ed49611d6077)
+- [e2ee one to many](https://medium.com/@TalBeerySec/the-ambassador-protocol-multi-device-e2ee-with-privacy-5c906a2d210a)

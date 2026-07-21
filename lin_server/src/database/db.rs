@@ -1,9 +1,20 @@
 use chrono::Utc;
 use diesel::{prelude::*, result::Error};
 use dotenvy::dotenv;
+use rand::RngExt;
 use std::env;
 
 use crate::database::{models::{Chat, Message, NewChat, NewMessage, NewUser, User}, schema::{chats::{dsl::chats, id}, messages::dsl::messages, users::dsl::users}};
+
+/// Generates a random, positive `i64` for use as a `chats`/`messages` primary key.
+///
+/// These tables use manually-assigned `BIGINT` ids rather than a `SERIAL`/`BIGSERIAL`
+/// column (see the global TODO about eventually moving to UUIDs), so callers are
+/// responsible for picking an id before inserting.
+pub fn generate_id() -> i64 {
+    let bits: u64 = rand::rng().random();
+    (bits >> 1) as i64
+}
 
 pub fn establish_connection() -> PgConnection {
     dotenv().ok();

@@ -1,10 +1,11 @@
 use std::time::{Duration, Instant};
 
+use actix_web::web;
 use actix_ws::AggregatedMessage;
 use futures_util::StreamExt as _;
 use tokio::{sync::mpsc, time::interval};
 
-use crate::{ChatServerHandle, ConnId};
+use crate::{ChatServerHandle, ConnId, database};
 
 /// How often heartbeat pings are sent
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
@@ -18,6 +19,7 @@ pub async fn chat_ws(
     chat_server: ChatServerHandle,
     mut session: actix_ws::Session,
     msg_stream: actix_ws::MessageStream,
+    user_id: i64,
 ) {
     log::info!("connected");
 
@@ -51,8 +53,15 @@ pub async fn chat_ws(
                     }
 
                     AggregatedMessage::Text(text) => {
-                        process_text_msg(&chat_server, &mut session, &text, conn_id, &mut name)
-                            .await;
+                        process_text_msg(
+                            &chat_server,
+                            &mut session,
+                            &text,
+                            conn_id,
+                            &mut name,
+                            user_id,
+                        )
+                        .await;
                     }
 
                     AggregatedMessage::Binary(_bin) => {
@@ -92,6 +101,7 @@ async fn process_text_msg(
     text: &str,
     conn: ConnId,
     name: &mut Option<String>,
+    user_id: i64,
 ) {
     // strip leading and trailing whitespace (spaces, newlines, etc.)
     let msg = text.trim();
@@ -123,6 +133,49 @@ async fn process_text_msg(
 
                 None => {
                     session.text("!!! room name is required").await.unwrap();
+                }
+            },
+
+            "/create" => match cmd_args.next() {
+                Some(title) => {
+                    let title = title.trim().to_owned();
+
+                    if title.is_empty() {
+                        session.text("!!! chat title is required").await.unwrap();
+                    } else {
+                        log::info!("conn {conn}: creating chat '{title}'");
+
+                        let new_id = database::db::generate_id();
+                        let title_for_db = title.clone();
+
+                        let result = web::block(move || {
+                            let mut db_conn = database::db::establish_connection();
+                            database::db::create_chat(&mut db_conn, new_id, title_for_db, user_id)
+                        })
+                        .await;
+
+                        match result {
+                            Ok(Ok(chat)) => {
+                                chat_server.join_room(conn, chat.id as u64).await;
+                                session
+                                    .text(format!("created chat {} \"{}\"", chat.id, chat.title))
+                                    .await
+                                    .unwrap();
+                            }
+                            Ok(Err(err)) => {
+                                log::error!("conn {conn}: failed to create chat: {err}");
+                                session.text("failed to create chat").await.unwrap();
+                            }
+                            Err(err) => {
+                                log::error!("conn {conn}: chat creation task failed: {err}");
+                                session.text("failed to create chat").await.unwrap();
+                            }
+                        }
+                    }
+                }
+
+                None => {
+                    session.text("chat title is required").await.unwrap();
                 }
             },
 

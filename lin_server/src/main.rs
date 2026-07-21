@@ -29,12 +29,34 @@ async fn index() -> impl Responder {
     NamedFile::open_async("./static/index.html").await.unwrap()
 }
 
+/// Reads the authenticated user ID injected by the nginx reverse proxy.
+///
+/// nginx terminates `/chat` requests with an `auth_request` against lin_auth's
+/// `/api/auth/validate` endpoint, which checks the caller's access token against the
+/// copy stored in Redis and, on success, echoes the user id back as `X-User-Id`.
+/// nginx then forwards that header on to us (see `nginx/nginx.conf`). lin_server trusts
+/// this header rather than re-validating the token itself, so requests that bypass nginx
+/// (e.g. hitting this service directly) must supply their own `X-User-Id` header.
+fn authenticated_user_id(req: &HttpRequest) -> Option<i64> {
+    req.headers()
+        .get("X-User-Id")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<i64>().ok())
+}
+
 /// Handshake and start WebSocket handler with heartbeats.
 async fn chat_ws(
     req: HttpRequest,
     stream: web::Payload,
     chat_server: web::Data<ChatServerHandle>,
 ) -> Result<HttpResponse, Error> {
+    let user_id = match authenticated_user_id(&req) {
+        Some(user_id) => user_id,
+        None => {
+            return Ok(HttpResponse::Unauthorized().body("missing or invalid X-User-Id header"));
+        }
+    };
+
     let (res, session, msg_stream) = actix_ws::handle(&req, stream)?;
 
     // spawn websocket handler (and don't await it) so that the response is returned immediately
@@ -42,6 +64,7 @@ async fn chat_ws(
         (**chat_server).clone(),
         session,
         msg_stream,
+        user_id,
     ));
 
     Ok(res)
@@ -62,8 +85,8 @@ async fn main() -> io::Result<()> {
             .app_data(web::Data::new(server_tx.clone()))
             // WebSocket UI HTML file
             .service(web::resource("/").to(index))
-            // websocket routes
-            .service(web::resource("/ws").route(web::get().to(chat_ws)))
+            // websocket routes (path must match the `/chat` location proxied by nginx)
+            .service(web::resource("/chat").route(web::get().to(chat_ws)))
             // standard middleware
             .wrap(middleware::NormalizePath::trim())
             .wrap(middleware::Logger::default())

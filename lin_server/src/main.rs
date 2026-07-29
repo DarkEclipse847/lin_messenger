@@ -92,7 +92,7 @@ async fn main() -> io::Result<()> {
             .wrap(middleware::Logger::default())
     })
     .workers(2)
-    .bind(("127.0.0.1", 8080))?
+    .bind(("0.0.0.0", 8080))?
     .run();
 
     try_join!(http_server, async move { chat_server.await.unwrap() })?;

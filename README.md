@@ -12,8 +12,8 @@
 
 ### Approximate progress on alpha(0.1) version:
 
-- 🔐 lin_auth (Authentification service) - ![Progress](https://progress-bar.xyz/64)
-- 🖧 lin_server (Actix websocket server) - ![Progress](https://progress-bar.xyz/30)
+- 🔐 lin_auth (Authentification service) - ![Progress](https://progress-bar.xyz/70)
+- 🖧 lin_server (Actix websocket server) - ![Progress](https://progress-bar.xyz/32)
 - 🔥 lin_client (Crossplatform Tauri client app) - ![Progress](https://progress-bar.xyz/0)
 
 ### Global TODOs:
@@ -26,6 +26,8 @@
 - [x] Chatroom creation
 - [x] Token based access to user????
 - [ ] Create connection with S3 storage
+
+- [x] ~~db url in rust server is somewhat inaccesible, need to check it~~ It was due to bad loopback on a server parts
 
 ### Global notes and materials:
 

@@ -1,4 +1,4 @@
-// Add rotating JWT secret key
+// TODO: Add rotating JWT secret key
 package utils
 
 import (
@@ -21,16 +21,6 @@ func GenerateToken(id int64, lifetime int64) (string, error) {
 
 	return token, err;
 }
-
-//func VerifyToken (token string) (bool, error){
-//	result, err := jwt.Parse(token, func(result *jwt.Token) (interface{}, error){
-//		return []byte(os.Getenv("JWT_SECRET")), nil
-//	})
-//	if err != nil{
-//		return false, err
-//	}
-//	return result.Valid, nil
-//}
 
 func ValidateToken(token string) (*jwt.Token, error) {
     result, err := jwt.Parse(token, func(t *jwt.Token) (interface{}, error) {

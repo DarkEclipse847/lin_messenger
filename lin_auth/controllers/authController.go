@@ -27,7 +27,7 @@ import (
 
 
 func extractAccessToken(c fiber.Ctx) string {
-	authHeader := c.Get("Authorization")
+	authHeader := strings.TrimSpace(c.Get("Authorization"))
 	if authHeader != "" {
 		parts := strings.Fields(authHeader)
 		if len(parts) == 2 && strings.ToLower(parts[0]) == "bearer" {
@@ -35,7 +35,7 @@ func extractAccessToken(c fiber.Ctx) string {
 		}
 	}
 
-	if cookie := c.Cookies("access_token"); cookie != "" {
+	if cookie := strings.TrimSpace(c.Cookies("access_token")); cookie != "" {
 		return cookie
 	}
 
@@ -80,7 +80,7 @@ func Validate(c fiber.Ctx, db *gorm.DB) error {
 
 	userID, err := parseUserIDFromToken(token)
 	if err != nil {
-		log.Error().Err(err).Msg("failed to parse access token")
+		log.Error().Err(err).Msgf("failed to parse access token: %s", token)
 		return c.Status(fiber.StatusUnauthorized).SendString("invalid token")
 	}
 

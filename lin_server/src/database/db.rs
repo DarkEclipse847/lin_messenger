@@ -1,10 +1,13 @@
 use chrono::Utc;
 use diesel::{prelude::*, result::Error};
+use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 use dotenvy::dotenv;
 use rand::RngExt;
 use std::env;
 
-use crate::database::{models::{Chat, Message, NewChat, NewMessage, NewUser, User}, schema::{chats::{dsl::chats, id}, messages::dsl::messages, users::dsl::users}};
+use crate::database::{models::{Chat, Message, NewChat, NewMessage, NewUser, User}};
+
+pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!();
 
 /// Generates a random, positive `i64` for use as a `chats`/`messages` primary key.
 ///
@@ -20,8 +23,13 @@ pub fn establish_connection() -> PgConnection {
     dotenv().ok();
 
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    PgConnection::establish(&database_url)
-        .unwrap_or_else(|_| panic!("Error connecting to {}", database_url))
+    let mut conn = PgConnection::establish(&database_url)
+        .unwrap_or_else(|_| panic!("Error connecting to {}", database_url));
+
+    conn.run_pending_migrations(MIGRATIONS)
+        .expect("Failed to run database migrations");
+
+    conn
 }
 
 

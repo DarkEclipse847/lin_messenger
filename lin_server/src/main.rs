@@ -4,15 +4,14 @@ use std::io;
 
 use actix_files::NamedFile;
 use actix_web::{App, Error, HttpRequest, HttpResponse, HttpServer, Responder, middleware, web};
-use tokio::{
-    task::{spawn, spawn_local},
-    try_join,
-};
+use tokio::{join, task::spawn};
 
 mod handler;
 mod server;
 mod controllers;
 mod database;
+
+use crate::controllers::rabbitmq_controller;
 
 pub use self::server::{ChatServer, ChatServerHandle};
 
@@ -60,7 +59,7 @@ async fn chat_ws(
     let (res, session, msg_stream) = actix_ws::handle(&req, stream)?;
 
     // spawn websocket handler (and don't await it) so that the response is returned immediately
-    spawn_local(handler::chat_ws(
+    actix_web::rt::spawn(handler::chat_ws(
         (**chat_server).clone(),
         session,
         msg_stream,
@@ -80,6 +79,25 @@ async fn main() -> io::Result<()> {
 
     let chat_server = spawn(chat_server.run());
 
+    std::thread::spawn(|| {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("failed to build RabbitMQ runtime");
+
+        runtime.block_on(async {
+            let mut db_conn = database::db::establish_connection();
+            if let Err(err) = rabbitmq_controller::rabbit_consumer(
+                &mut db_conn,
+                "REGISTRATION_REQ".into(),
+            )
+            .await
+            {
+                log::error!("RabbitMQ consumer stopped: {err:?}");
+            }
+        });
+    });
+
     let http_server = HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(server_tx.clone()))
@@ -95,7 +113,10 @@ async fn main() -> io::Result<()> {
     .bind(("0.0.0.0", 8080))?
     .run();
 
-    try_join!(http_server, async move { chat_server.await.unwrap() })?;
+    let (http_result, _) = join!(
+        http_server,
+        async move { chat_server.await.unwrap() }
+    );
 
-    Ok(())
+    http_result
 }

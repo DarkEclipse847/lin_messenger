@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
 RUN USER=root cargo new --bin lin_server
 WORKDIR /app/lin_server
 COPY Cargo.toml Cargo.lock ./
+COPY migrations ./migrations
 RUN cargo build --release
 COPY src ./src
 RUN touch src/main.rs

@@ -7,14 +7,14 @@ use tokio::{sync::mpsc, time::interval};
 
 use crate::{ChatServerHandle, ConnId, database};
 
-/// How often heartbeat pings are sent
+// How often heartbeat pings are sent
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
-/// How long before lack of client response causes a timeout
+// How long before lack of client response causes a timeout
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Echo text & binary messages received from the client, respond to ping messages, and monitor
-/// connection health to detect network issues and free up resources.
+// Echo text & binary messages received from the client, respond to ping messages, and monitor
+// connection health to detect network issues and free up resources.
 pub async fn chat_ws(
     chat_server: ChatServerHandle,
     mut session: actix_ws::Session,

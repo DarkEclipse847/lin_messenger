@@ -1,4 +1,4 @@
-//! Multi-room WebSocket chat server.
+// Multi-room WebSocket chat server.
 
 use std::io;
 
@@ -15,27 +15,27 @@ use crate::controllers::rabbitmq_controller;
 
 pub use self::server::{ChatServer, ChatServerHandle};
 
-/// Connection ID.
+// Connection ID.
 pub type ConnId = u64;
 
-/// Room ID.
+// Room ID.
 pub type RoomId = u64;
 
-/// Message sent to a room/client.
+// Message sent to a room/client.
 pub type Msg = String;
 
 async fn index() -> impl Responder {
     NamedFile::open_async("./static/index.html").await.unwrap()
 }
 
-/// Reads the authenticated user ID injected by the nginx reverse proxy.
-///
-/// nginx terminates `/chat` requests with an `auth_request` against lin_auth's
-/// `/api/auth/validate` endpoint, which checks the caller's access token against the
-/// copy stored in Redis and, on success, echoes the user id back as `X-User-Id`.
-/// nginx then forwards that header on to us (see `nginx/nginx.conf`). lin_server trusts
-/// this header rather than re-validating the token itself, so requests that bypass nginx
-/// (e.g. hitting this service directly) must supply their own `X-User-Id` header.
+// Reads the authenticated user ID injected by the nginx reverse proxy.
+//
+// nginx terminates `/chat` requests with an `auth_request` against lin_auth's
+// `/api/auth/validate` endpoint, which checks the caller's access token against the
+// copy stored in Redis and, on success, echoes the user id back as `X-User-Id`.
+// nginx then forwards that header on to us (see `nginx/nginx.conf`). lin_server trusts
+// this header rather than re-validating the token itself, so requests that bypass nginx
+// (e.g. hitting this service directly) must supply their own `X-User-Id` header.
 fn authenticated_user_id(req: &HttpRequest) -> Option<i64> {
     req.headers()
         .get("X-User-Id")
@@ -43,7 +43,7 @@ fn authenticated_user_id(req: &HttpRequest) -> Option<i64> {
         .and_then(|value| value.parse::<i64>().ok())
 }
 
-/// Handshake and start WebSocket handler with heartbeats.
+// Handshake and start WebSocket handler with heartbeats.
 async fn chat_ws(
     req: HttpRequest,
     stream: web::Payload,

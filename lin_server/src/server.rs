@@ -1,4 +1,4 @@
-//! A multi-room chat server.
+// A multi-room chat server.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -14,7 +14,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::{ConnId, Msg, RoomId};
 
-/// A command received by the [`ChatServer`].
+// A command received by the [`ChatServer`].
 #[derive(Debug)]
 enum Command {
     Connect {
@@ -43,23 +43,23 @@ enum Command {
     },
 }
 
-/// A multi-room chat server.
-///
-/// Contains the logic of how connections chat with each other plus room management.
-///
-/// Call and spawn [`run`](Self::run) to start processing commands.
+// A multi-room chat server.
+//
+// Contains the logic of how connections chat with each other plus room management.
+//
+// Call and spawn [`run`](Self::run) to start processing commands.
 #[derive(Debug)]
 pub struct ChatServer {
-    /// Map of connection IDs to their message receivers.
+    // Map of connection IDs to their message receivers.
     sessions: HashMap<ConnId, mpsc::UnboundedSender<Msg>>,
 
-    /// Map of room name to participant IDs in that room.
+    // Map of room name to participant IDs in that room.
     rooms: HashMap<RoomId, HashSet<ConnId>>,
 
-    /// Tracks total number of historical connections established.
+    // Tracks total number of historical connections established.
     visitor_count: Arc<AtomicUsize>,
 
-    /// Command receiver.
+    // Command receiver.
     cmd_rx: mpsc::UnboundedReceiver<Command>,
 }
 
@@ -84,9 +84,8 @@ impl ChatServer {
         )
     }
 
-    /// Send message to users in a room.
-    ///
-    /// `skip` is used to prevent messages triggered by a connection also being received by it.
+    // Send message to users in a room.
+    // `skip` is used to prevent messages triggered by a connection also being received by it.
     async fn send_system_message(&self, room: &u64, skip: ConnId, msg: impl Into<Msg>) {
         if let Some(sessions) = self.rooms.get(room) {
             let msg = msg.into();
@@ -102,10 +101,9 @@ impl ChatServer {
         }
     }
 
-    /// Send message to all other users in current room.
-    ///
-    /// `conn` is used to find current room and prevent messages sent by a connection also being
-    /// received by it.
+    // Send message to all other users in current room.
+    // `conn` is used to find current room and prevent messages sent by a connection also being
+    // received by it.
     async fn send_message(&self, conn: ConnId, msg: impl Into<Msg>) {
         if let Some(room) = self
             .rooms
@@ -116,7 +114,7 @@ impl ChatServer {
         };
     }
 
-    /// Register new session and assign unique ID to this session
+    // Register new session and assign unique ID to this session
     async fn connect(&mut self, tx: mpsc::UnboundedSender<Msg>) -> ConnId {
         log::info!("Someone joined");
 
@@ -138,7 +136,7 @@ impl ChatServer {
         id
     }
 
-    /// Unregister connection from room map and broadcast disconnection message.
+    // Unregister connection from room map and broadcast disconnection message.
     async fn disconnect(&mut self, conn_id: ConnId) {
         println!("Someone disconnected");
 
@@ -161,12 +159,12 @@ impl ChatServer {
         }
     }
 
-    /// Returns list of created room names.
+    // Returns list of created room names.
     fn list_rooms(&mut self) -> Vec<RoomId> {
         self.rooms.keys().cloned().collect()
     }
 
-    /// Join room, send disconnect message to old room send join message to new room.
+    // Join room, send disconnect message to old room send join message to new room.
     async fn join_room(&mut self, conn_id: ConnId, room: RoomId) {
         let mut rooms = Vec::new();
 
@@ -220,16 +218,15 @@ impl ChatServer {
     }
 }
 
-/// Handle and command sender for chat server.
-///
-/// Reduces boilerplate of setting up response channels in WebSocket handlers.
+// Handle and command sender for chat server.
+// Reduces boilerplate of setting up response channels in WebSocket handlers.
 #[derive(Debug, Clone)]
 pub struct ChatServerHandle {
     cmd_tx: mpsc::UnboundedSender<Command>,
 }
 
 impl ChatServerHandle {
-    /// Register client message sender and obtain connection ID.
+    // Register client message sender and obtain connection ID.
     pub async fn connect(&self, conn_tx: mpsc::UnboundedSender<Msg>) -> ConnId {
         let (res_tx, res_rx) = oneshot::channel();
 
@@ -242,7 +239,7 @@ impl ChatServerHandle {
         res_rx.await.unwrap()
     }
 
-    /// List all created rooms.
+    // List all created rooms.
     pub async fn list_rooms(&self) -> Vec<RoomId> {
         let (res_tx, res_rx) = oneshot::channel();
 
@@ -253,7 +250,7 @@ impl ChatServerHandle {
         res_rx.await.unwrap()
     }
 
-    /// Join `room`, creating it if it does not exist.
+    // Join `room`, creating it if it does not exist.
     pub async fn join_room(&self, conn: ConnId, room: impl Into<RoomId>) {
         let (res_tx, res_rx) = oneshot::channel();
 
@@ -270,7 +267,7 @@ impl ChatServerHandle {
         res_rx.await.unwrap();
     }
 
-    /// Broadcast message to current room.
+    // Broadcast message to current room.
     pub async fn send_message(&self, conn: ConnId, msg: impl Into<Msg>) {
         let (res_tx, res_rx) = oneshot::channel();
 
@@ -287,7 +284,7 @@ impl ChatServerHandle {
         res_rx.await.unwrap();
     }
 
-    /// Unregister message sender and broadcast disconnection message to current room.
+    // Unregister message sender and broadcast disconnection message to current room.
     pub fn disconnect(&self, conn: ConnId) {
         // unwrap: chat server should not have been dropped
         self.cmd_tx.send(Command::Disconnect { conn }).unwrap();

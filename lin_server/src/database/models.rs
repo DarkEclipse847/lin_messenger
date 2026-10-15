@@ -1,9 +1,8 @@
 //https://stackoverflow.com/questions/8351526/storing-chat-messages-inside-a-mysql-table?rq=4
 //ID IS NOT SHARED
 
-use diesel::prelude::*;
 use chrono::NaiveDateTime;
-
+use diesel::prelude::*;
 
 // Do i really need to store chat ids in user?
 #[derive(Queryable, Selectable, Debug)]
@@ -19,7 +18,6 @@ pub struct User {
     pub profile_img: Option<String>,
     pub bio: Option<String>,
     pub registred_at: NaiveDateTime,
-
 }
 
 #[derive(Queryable, Selectable)]
@@ -36,7 +34,6 @@ pub struct Chat {
     pub created_at: chrono::NaiveDateTime,
 }
 
-
 #[derive(Queryable, Selectable, Insertable, Debug)]
 #[diesel(table_name = crate::database::schema::messages)]
 pub struct Message {
@@ -45,19 +42,19 @@ pub struct Message {
     pub sender_id: i64,
     pub body: String,
     pub sent_at: NaiveDateTime,
-    pub attachment: Option<String>
+    pub attachment: Option<String>,
 }
 
 #[derive(Insertable)]
 #[diesel(table_name = crate::database::schema::messages)]
 
 pub struct NewMessage<'a> {
+    pub id: &'a i64,
     pub chat_id: &'a i64,
     pub sender_id: &'a i64,
     pub body: &'a str,
     pub sent_at: &'a NaiveDateTime,
     pub attachment: Option<&'a str>,
-
 }
 
 #[derive(Insertable)]

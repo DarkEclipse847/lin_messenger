@@ -2,48 +2,58 @@ package redis
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	"github.com/rs/zerolog/log"
 )
 
-// NewClient initializes a Redis client using a connection URL.
-func NewClient() *redis.Client {
+const operationTimeout = 3 * time.Second
+
+func NewClient() (*redis.Client, error) {
 	redisURL := os.Getenv("REDIS_URL")
 	if redisURL == "" {
-		log.Error().Msg("Redis URL not found, using loopback to localhost")
-		// Fallback to local default if the environment variable is missing
 		redisURL = "redis://localhost:6379/0"
 	}
-
-	// ParseURL extracts Address, Password, and DB index automatically
 	opts, err := redis.ParseURL(redisURL)
 	if err != nil {
-		// Log the error and fall back to empty/default options so the application doesn't crash instantly,
-		// though connections will fail until the URL is fixed.
-		// log.Printf("failed to parse redis url: %v", err)
-		return redis.NewClient(&redis.Options{})
+		return nil, errors.New("invalid REDIS_URL")
 	}
-
-	return redis.NewClient(opts)
+	opts.DialTimeout = operationTimeout
+	opts.ReadTimeout = operationTimeout
+	opts.WriteTimeout = operationTimeout
+	opts.ContextTimeoutEnabled = true
+	return redis.NewClient(opts), nil
 }
 
-// StoreAccessToken stores a token with a specific TTL.
-// Optimization Note: It is highly recommended to reuse a single client instance 
-// instead of creating and closing a new client connection on every function call.
+// One pool for the process, not one connection pool per request. Configuration
+// errors are preserved instead of silently connecting to a different Redis host.
+var sharedClient = sync.OnceValues(NewClient)
+
+func Initialize() error {
+	_, err := sharedClient()
+	return err
+}
+
 func StoreAccessToken(userID int64, token string, ttl time.Duration) error {
-	client := NewClient()
-	defer client.Close()
-	key := fmt.Sprintf("access_token:%d", userID)
-	return client.Set(context.Background(), key, token, ttl).Err()
+	client, err := sharedClient()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), operationTimeout)
+	defer cancel()
+	return client.Set(ctx, fmt.Sprintf("access_token:%d", userID), token, ttl).Err()
 }
 
 func GetAccessToken(userID int64) (string, error) {
-	client := NewClient()
-	defer client.Close()
-	key := fmt.Sprintf("access_token:%d", userID)
-	return client.Get(context.Background(), key).Result()
+	client, err := sharedClient()
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), operationTimeout)
+	defer cancel()
+	return client.Get(ctx, fmt.Sprintf("access_token:%d", userID)).Result()
 }

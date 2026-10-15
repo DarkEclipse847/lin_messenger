@@ -1,10 +1,12 @@
 use diesel::PgConnection;
 use futures_util::StreamExt;
 use lapin::{
-    Connection, ConnectionProperties, Error, options::*, types::{FieldTable, ShortString}
+    Connection, ConnectionProperties, Error,
+    options::*,
+    types::{FieldTable, ShortString},
 };
 
-use crate::{controllers::models::UserRabbit, database::db::new_user};
+use crate::{controllers::models::UserRabbit, database::db::replicate_user};
 
 // https://youtu.be/QwoF1-1QgwA?si=H3IZSgPmXDgnpk-c
 // lol i've coded this drunk af on a party, and when my playlist suddenly played this song, i saved it here
@@ -39,10 +41,13 @@ pub async fn rabbit_connection() -> Result<Connection, Error> {
     Connection::connect(&rabbitmq_url(), ConnectionProperties::default()).await
 }
 
-pub async fn rabbit_consumer(db_conn: &mut PgConnection,queue_name: ShortString)-> Result<String, Error>{
-    let conn = rabbit_connection().await.unwrap();
+pub async fn rabbit_consumer(
+    db_conn: &mut PgConnection,
+    queue_name: ShortString,
+) -> Result<String, Error> {
+    let conn = rabbit_connection().await?;
     let channel = conn.create_channel().await?;
-    log::info!("{:?}",conn.status());
+    log::info!("{:?}", conn.status());
 
     let queue = channel
         .queue_declare(
@@ -54,8 +59,10 @@ pub async fn rabbit_consumer(db_conn: &mut PgConnection,queue_name: ShortString)
             FieldTable::default(),
         )
         .await?;
-    log::info!("{:?}",conn.status());
+    log::info!("{:?}", conn.status());
     log::info!("Declared queue: {:?}", queue);
+
+    channel.basic_qos(16, BasicQosOptions::default()).await?;
 
     let mut consumer = channel
         .basic_consume(
@@ -68,27 +75,71 @@ pub async fn rabbit_consumer(db_conn: &mut PgConnection,queue_name: ShortString)
     log::info!("{:?}", conn.status());
 
     while let Some(delivery) = consumer.next().await {
-        log::info!("received message: {:?}", delivery);
-        
-        //let data = &delivery.data;
-        
-        let payload = &delivery.unwrap().data;
-        match serde_json::from_slice::<UserRabbit>(payload){
-            Ok(json_body) => {
-                if json_body.interaction_type == "insert" {
-                    log::info!("{:?}",new_user(db_conn, json_body.id, json_body.username, json_body.email))
+        let delivery = delivery?;
+        let event = registration_event(&delivery.data);
+        match event {
+            Some(event) => {
+                match replicate_user(db_conn, event.id, event.username, event.email) {
+                    Ok(()) => {
+                        delivery.ack(BasicAckOptions::default()).await?;
+                    }
+                    Err(_) => {
+                        // Leave the delivery unacknowledged and stop; closing the channel
+                        // requeues it without a tight retry loop or silently losing it.
+                        log::error!(
+                            "Registration persistence failed; consumer stopped with delivery unacknowledged"
+                        );
+                        break;
+                    }
                 }
             }
-            Err(e) => {
-                log::error!("Failed to parse JSON: {}", e)
+            _ => {
+                // A configured dead-letter exchange receives rejected events.
+                log::warn!("Rejecting invalid or unsupported registration event");
+                delivery
+                    .reject(BasicRejectOptions { requeue: false })
+                    .await?;
             }
         }
-        //if let Ok(delivery) = delivery {
-        //    //let delivery = delivery;
-        //    let json_data:  = serde_json::from_slice(&delivery.data);
-        //    delivery.ack(BasicAckOptions::default()).await.expect("Failed to ack");
-        //}
     }
 
-    Ok("RabbitMQ consumer initialized".to_string()) 
+    Ok("RabbitMQ consumer stopped".to_string())
+}
+
+fn registration_event(payload: &[u8]) -> Option<UserRabbit> {
+    serde_json::from_slice::<UserRabbit>(payload)
+        .ok()
+        .filter(|event| event.interaction_type == "insert" && event.id > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::registration_event;
+
+    #[test]
+    fn auth_registration_fixture_preserves_full_i64_identity() {
+        let event = registration_event(include_bytes!(
+            "../../../contracts/registration_insert.json"
+        ))
+        .unwrap();
+        assert_eq!(event.id, i64::MAX);
+        assert_eq!(event.username, "alice");
+        assert_eq!(event.email, "alice@example.test");
+    }
+
+    #[test]
+    fn registration_contract_requires_supported_operation_and_valid_identity() {
+        let valid = br#"{"interaction_type":"insert","id":42,"username":"alice","email":"alice@example.test"}"#;
+        let event = registration_event(valid).unwrap();
+        assert_eq!(event.id, 42);
+        assert_eq!(event.username, "alice");
+        for payload in [
+            "not JSON",
+            r#"{"interaction_type":"insert","id":42}"#,
+            r#"{"interaction_type":"delete","id":42,"username":"alice","email":"a"}"#,
+            r#"{"interaction_type":"insert","id":-1,"username":"alice","email":"a"}"#,
+        ] {
+            assert!(registration_event(payload.as_bytes()).is_none());
+        }
+    }
 }

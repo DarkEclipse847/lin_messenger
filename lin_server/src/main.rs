@@ -3,13 +3,13 @@
 use std::io;
 
 use actix_files::NamedFile;
-use actix_web::{App, Error, HttpRequest, HttpResponse, HttpServer, Responder, middleware, web};
-use tokio::{join, task::spawn};
+use actix_web::{App, Error, HttpRequest, HttpResponse, HttpServer, middleware, web};
+use tokio::task::spawn;
 
-mod handler;
-mod server;
 mod controllers;
 mod database;
+mod handler;
+mod server;
 
 use crate::controllers::rabbitmq_controller;
 
@@ -24,8 +24,8 @@ pub type RoomId = u64;
 // Message sent to a room/client.
 pub type Msg = String;
 
-async fn index() -> impl Responder {
-    NamedFile::open_async("./static/index.html").await.unwrap()
+async fn index() -> actix_web::Result<NamedFile> {
+    Ok(NamedFile::open_async("./static/index.html").await?)
 }
 
 // Reads the authenticated user ID injected by the nginx reverse proxy.
@@ -34,13 +34,14 @@ async fn index() -> impl Responder {
 // `/api/auth/validate` endpoint, which checks the caller's access token against the
 // copy stored in Redis and, on success, echoes the user id back as `X-User-Id`.
 // nginx then forwards that header on to us (see `nginx/nginx.conf`). lin_server trusts
-// this header rather than re-validating the token itself, so requests that bypass nginx
-// (e.g. hitting this service directly) must supply their own `X-User-Id` header.
+// this header rather than re-validating the token itself. Network policy MUST prevent
+// clients from reaching this listener directly.
 fn authenticated_user_id(req: &HttpRequest) -> Option<i64> {
     req.headers()
         .get("X-User-Id")
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<i64>().ok())
+        .filter(|id| *id > 0)
 }
 
 // Handshake and start WebSocket handler with heartbeats.
@@ -77,7 +78,7 @@ async fn main() -> io::Result<()> {
 
     let (chat_server, server_tx) = ChatServer::new();
 
-    let chat_server = spawn(chat_server.run());
+    let mut chat_server = spawn(chat_server.run());
 
     std::thread::spawn(|| {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -87,11 +88,8 @@ async fn main() -> io::Result<()> {
 
         runtime.block_on(async {
             let mut db_conn = database::db::establish_connection();
-            if let Err(err) = rabbitmq_controller::rabbit_consumer(
-                &mut db_conn,
-                "REGISTRATION_REQ".into(),
-            )
-            .await
+            if let Err(err) =
+                rabbitmq_controller::rabbit_consumer(&mut db_conn, "REGISTRATION_REQ".into()).await
             {
                 log::error!("RabbitMQ consumer stopped: {err:?}");
             }
@@ -113,10 +111,39 @@ async fn main() -> io::Result<()> {
     .bind(("0.0.0.0", 8080))?
     .run();
 
-    let (http_result, _) = join!(
-        http_server,
-        async move { chat_server.await.unwrap() }
-    );
+    tokio::select! {
+        result = http_server => {
+            chat_server.abort();
+            let _ = chat_server.await;
+            result
+        }
+        result = &mut chat_server => {
+            log::error!("Chat command processor stopped: {result:?}");
+            Err(io::Error::other("chat command processor stopped"))
+        }
+    }
+}
 
-    http_result
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actix_web::test::TestRequest;
+
+    #[test]
+    fn identity_requires_a_positive_database_id() {
+        assert_eq!(
+            authenticated_user_id(&TestRequest::default().to_http_request()),
+            None
+        );
+        for value in ["0", "-1", "abc", "9223372036854775808"] {
+            let req = TestRequest::default()
+                .insert_header(("X-User-Id", value))
+                .to_http_request();
+            assert_eq!(authenticated_user_id(&req), None);
+        }
+        let req = TestRequest::default()
+            .insert_header(("X-User-Id", "42"))
+            .to_http_request();
+        assert_eq!(authenticated_user_id(&req), Some(42));
+    }
 }

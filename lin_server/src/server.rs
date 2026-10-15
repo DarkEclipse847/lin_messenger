@@ -18,7 +18,7 @@ use crate::{ConnId, Msg, RoomId};
 #[derive(Debug)]
 enum Command {
     Connect {
-        conn_tx: mpsc::UnboundedSender<Msg>,
+        conn_tx: mpsc::Sender<Msg>,
         res_tx: oneshot::Sender<ConnId>,
     },
 
@@ -51,7 +51,7 @@ enum Command {
 #[derive(Debug)]
 pub struct ChatServer {
     // Map of connection IDs to their message receivers.
-    sessions: HashMap<ConnId, mpsc::UnboundedSender<Msg>>,
+    sessions: HashMap<ConnId, mpsc::Sender<Msg>>,
 
     // Map of room name to participant IDs in that room.
     rooms: HashMap<RoomId, HashSet<ConnId>>,
@@ -86,7 +86,8 @@ impl ChatServer {
 
     // Send message to users in a room.
     // `skip` is used to prevent messages triggered by a connection also being received by it.
-    async fn send_system_message(&self, room: &u64, skip: ConnId, msg: impl Into<Msg>) {
+    async fn send_system_message(&mut self, room: &u64, skip: ConnId, msg: impl Into<Msg>) {
+        let mut stalled = Vec::new();
         if let Some(sessions) = self.rooms.get(room) {
             let msg = msg.into();
 
@@ -94,35 +95,50 @@ impl ChatServer {
                 if *conn_id != skip {
                     if let Some(tx) = self.sessions.get(conn_id) {
                         // errors if client disconnected abruptly and hasn't been timed-out yet
-                        let _ = tx.send(msg.clone());
+                        if tx.try_send(msg.clone()).is_err() {
+                            stalled.push(*conn_id);
+                        }
                     }
                 }
             }
         }
+        for conn in stalled {
+            self.sessions.remove(&conn);
+            for participants in self.rooms.values_mut() {
+                participants.remove(&conn);
+            }
+        }
+        self.rooms
+            .retain(|_, participants| !participants.is_empty());
     }
 
     // Send message to all other users in current room.
     // `conn` is used to find current room and prevent messages sent by a connection also being
     // received by it.
-    async fn send_message(&self, conn: ConnId, msg: impl Into<Msg>) {
+    async fn send_message(&mut self, conn: ConnId, msg: impl Into<Msg>) {
         if let Some(room) = self
             .rooms
             .iter()
-            .find_map(|(room, participants)| participants.contains(&conn).then_some(room))
+            .find_map(|(room, participants)| participants.contains(&conn).then_some(*room))
         {
-            self.send_system_message(room, conn, msg).await;
+            self.send_system_message(&room, conn, msg).await;
         };
     }
 
     // Register new session and assign unique ID to this session
-    async fn connect(&mut self, tx: mpsc::UnboundedSender<Msg>) -> ConnId {
+    async fn connect(&mut self, tx: mpsc::Sender<Msg>) -> ConnId {
         log::info!("Someone joined");
 
         // notify all users in same room
         self.send_system_message(&0, 0, "Someone joined").await;
 
         // register session with random connection ID
-        let id = rand::rng().random::<ConnId>();
+        let id = loop {
+            let candidate = rand::rng().random::<ConnId>();
+            if !self.sessions.contains_key(&candidate) {
+                break candidate;
+            }
+        };
         self.sessions.insert(id, tx);
 
         // auto join session to main room
@@ -166,6 +182,9 @@ impl ChatServer {
 
     // Join room, send disconnect message to old room send join message to new room.
     async fn join_room(&mut self, conn_id: ConnId, room: RoomId) {
+        if !self.sessions.contains_key(&conn_id) {
+            return;
+        }
         let mut rooms = Vec::new();
 
         // remove session from all rooms
@@ -180,7 +199,7 @@ impl ChatServer {
                 .await;
         }
 
-        self.rooms.entry(room.clone()).or_default().insert(conn_id);
+        self.rooms.entry(room).or_default().insert(conn_id);
 
         self.send_system_message(&room, conn_id, "Someone connected")
             .await;
@@ -191,7 +210,9 @@ impl ChatServer {
             match cmd {
                 Command::Connect { conn_tx, res_tx } => {
                     let conn_id = self.connect(conn_tx).await;
-                    let _ = res_tx.send(conn_id);
+                    if res_tx.send(conn_id).is_err() {
+                        self.disconnect(conn_id).await;
+                    }
                 }
 
                 Command::Disconnect { conn } => {
@@ -227,7 +248,7 @@ pub struct ChatServerHandle {
 
 impl ChatServerHandle {
     // Register client message sender and obtain connection ID.
-    pub async fn connect(&self, conn_tx: mpsc::UnboundedSender<Msg>) -> ConnId {
+    pub async fn connect(&self, conn_tx: mpsc::Sender<Msg>) -> ConnId {
         let (res_tx, res_rx) = oneshot::channel();
 
         // unwrap: chat server should not have been dropped
@@ -287,6 +308,54 @@ impl ChatServerHandle {
     // Unregister message sender and broadcast disconnection message to current room.
     pub fn disconnect(&self, conn: ConnId) {
         // unwrap: chat server should not have been dropped
-        self.cmd_tx.send(Command::Disconnect { conn }).unwrap();
+        let _ = self.cmd_tx.send(Command::Disconnect { conn });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn slow_clients_are_removed_without_blocking_healthy_clients() {
+        let (mut server, _) = ChatServer::new();
+        let (slow, _slow_rx) = mpsc::channel(1);
+        let (healthy, mut healthy_rx) = mpsc::channel(4);
+        slow.try_send("full".into()).unwrap();
+        server.sessions.insert(10, slow);
+        server.sessions.insert(11, healthy);
+        server.rooms.insert(42, HashSet::from([10, 11]));
+        server.send_system_message(&42, 0, "hello").await;
+        assert_eq!(healthy_rx.recv().await.as_deref(), Some("hello"));
+        assert!(!server.sessions.contains_key(&10));
+        assert_eq!(server.rooms[&42], HashSet::from([11]));
+    }
+
+    #[tokio::test]
+    async fn leaving_last_room_removes_it_and_unknown_connections_cannot_join() {
+        let (mut server, _) = ChatServer::new();
+        let (tx, _rx) = mpsc::channel(16);
+        let id = server.connect(tx).await;
+        server.join_room(id, 42).await;
+        assert!(!server.rooms.contains_key(&0));
+        server.disconnect(id).await;
+        assert!(server.rooms.is_empty());
+        server.join_room(id, 99).await;
+        assert!(server.rooms.is_empty());
+    }
+
+    #[tokio::test]
+    async fn messages_only_reach_other_connections_in_the_same_room() {
+        let (mut server, _) = ChatServer::new();
+        let (a, mut ar) = mpsc::channel(4);
+        let (b, mut br) = mpsc::channel(4);
+        let (c, mut cr) = mpsc::channel(4);
+        server.sessions.extend([(1, a), (2, b), (3, c)]);
+        server.rooms.insert(10, HashSet::from([1, 2]));
+        server.rooms.insert(20, HashSet::from([3]));
+        server.send_message(1, "hello").await;
+        assert_eq!(br.recv().await.as_deref(), Some("hello"));
+        assert!(ar.try_recv().is_err());
+        assert!(cr.try_recv().is_err());
     }
 }

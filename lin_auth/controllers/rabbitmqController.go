@@ -1,72 +1,96 @@
 package controllers
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"os"
+	"time"
 
 	"github.com/lin_auth/models"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/rs/zerolog/log"
 )
 
-// rabbitmqURL resolves the broker address from RABBITMQ_URL, matching the
-// connection string configured in compose.yaml, falling back to a local
-// broker for standalone (non-docker) runs.
 func rabbitmqURL() string {
-	url := os.Getenv("RABBITMQ_URL")
-	if url == "" {
-		log.Error().Msg("RabbitMQ URL not found, using loopback to localhost")
-		url = "amqp://localhost:5672"
+	if url := os.Getenv("RABBITMQ_URL"); url != "" {
+		return url
 	}
-	return url
+	return "amqp://guest:guest@localhost:5672/%2F"
 }
 
-func rabbitSend(queueName string, user *models.User) {
+func registrationMessage(user *models.User) (amqp.Publishing, error) {
+	if user.Id <= 0 || user.Interaction_Type != "insert" {
+		return amqp.Publishing{}, errors.New("invalid registration event")
+	}
+	body, err := json.Marshal(user)
+	return amqp.Publishing{ContentType: "application/json", DeliveryMode: amqp.Persistent, Body: body}, err
+}
 
-	//Init connection to RabbitMQ
-	conn, err := amqp.Dial(rabbitmqURL())
+func rabbitSend(queueName string, user *models.User) error {
+	msg, err := registrationMessage(user)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to connect to RabbitMQ")
-		return
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	deadline, _ := ctx.Deadline()
+	conn, err := amqp.DialConfig(rabbitmqURL(), amqp.Config{
+		Dial: func(network, address string) (net.Conn, error) {
+			socket, err := (&net.Dialer{}).DialContext(ctx, network, address)
+			if err != nil {
+				return nil, err
+			}
+			if err := socket.SetDeadline(deadline); err != nil {
+				socket.Close()
+				return nil, err
+			}
+			// The AMQP library clears handshake deadlines, so cancellation
+			// must also close the socket to bound later channel RPCs/writes.
+			context.AfterFunc(ctx, func() { _ = socket.Close() })
+			return socket, nil
+		},
+	})
+	if err != nil {
+		return err
 	}
 	defer conn.Close()
-
-	//Open a channel
 	channel, err := conn.Channel()
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to open a channel")
-		return
+		return err
 	}
 	defer channel.Close()
-
-	// Declaring a queue
-	//---- name --> durable --> autoDelete --> exclusive --> noWait --> error
-	_, err = channel.QueueDeclare(queueName, true, false, false, false, nil)
+	if _, err := channel.QueueDeclare(queueName, true, false, false, false, nil); err != nil {
+		return err
+	}
+	if err := channel.Confirm(false); err != nil {
+		return err
+	}
+	returned := channel.NotifyReturn(make(chan amqp.Return, 1))
+	confirmation, err := channel.PublishWithDeferredConfirm("", queueName, true, false, msg)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to declare a queue")
-		return
+		return err
 	}
-
-	userToJSON, err := json.Marshal(user)
+	confirmed, err := confirmation.WaitContext(ctx)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to create JSON")
-		return
+		return err
 	}
-
-	msg := amqp.Publishing{
-		ContentType: "application/json",
-		Body:        userToJSON,
+	if !confirmed {
+		return errors.New("registration publication rejected")
 	}
-
-	if err := channel.Publish("", queueName, false, false, msg); err != nil {
-		log.Error().Err(err).Msg("Failed to publish message")
+	select {
+	case <-returned:
+		return errors.New("registration event was not routed")
+	default:
+		return nil
 	}
 }
 
 //Recieving msg from rabbit
 //https://stackoverflow.com/questions/53253797/make-go-routine-wait-until-result-from-rabbitmq-is-sent
 
-//TODO: set a timeout, because rust server can be offline(no, but yeah)
+// TODO: set a timeout, because rust server can be offline(no, but yeah)
 func rabbitReceive(queueName string) <-chan string {
 	resCh := make(chan string)
 

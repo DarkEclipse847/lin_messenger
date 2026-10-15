@@ -67,8 +67,10 @@ and `lin_server/NOTES.md` include proposals, not implemented contracts.
 - Change dependencies only when needed; keep existing `go.sum` and Cargo lockfile
   consistent. Do not add a new frontend package manager as incidental cleanup.
 - Add targeted regression tests for behavior changes, especially authentication,
-  command parsing, and broker contracts. No test suite or CI pipeline is currently
-  checked in; a successful compilation alone does not verify these flows.
+  command parsing, and broker contracts. Go and Rust regression tests are checked
+  in, including a shared registration fixture in `contracts/registration_insert.json`.
+  No CI pipeline is currently checked in; a successful compilation alone does not
+  verify these flows.
 
 ## Validation commands
 
@@ -99,9 +101,12 @@ unless dependencies were available and the flows were actually exercised.
   copied into its image. It is not a usable bundled chat UI or health check.
 - Rooms and message broadcasts are in memory. `/create` persists a chat, but
   ordinary messages are not persisted and `/join` does not enforce membership.
-- Registration publishing is best effort, and the Rust consumer currently lacks
-  acknowledgements/retry handling. Do not assume reliable profile synchronization
-  or atomic registration across services.
+- Registration publishing remains best effort despite persistent messages and
+  publisher confirms. The Rust consumer acknowledges successful persistence,
+  accepts matching duplicate registrations, and rejects invalid events without
+  requeueing. Persistence failures stop the consumer with the delivery unacknowledged;
+  there is no automatic reconnect/retry loop. Do not assume reliable profile
+  synchronization or atomic registration across services.
 - Refresh/logout endpoints, message history, end-to-end encryption, S3 attachment
   integration, and a functional messenger client are not implemented. Keep such
   roadmap items distinct from current capabilities.

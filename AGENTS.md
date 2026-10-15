@@ -96,7 +96,8 @@ unless dependencies were available and the flows were actually exercised.
 - Rust embeds migrations at compile time and its Dockerfile copies them. Missing
   migrations block reproducible builds; `schema.rs` is not a substitute for SQL.
 - Go listens on port 8000; Rust listens on 8080. `APPLICATION_PORT` is not read by
-  Go. Rust currently does not use Redis even if local Compose supplies its URL.
+  Go. Rust connects to Redis using `REDIS_URL` at startup and shares an async connection
+  manager with HTTP workers; token validation remains in auth.
 - The Rust `/` handler expects `static/index.html`, which is not checked in or
   copied into its image. It is not a usable bundled chat UI or health check.
 - Rooms and message broadcasts are in memory. `/create` persists a chat, but

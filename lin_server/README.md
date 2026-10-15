@@ -65,7 +65,7 @@ are not implemented.
 
 Use a Rust toolchain compatible with the locked dependencies and edition 2024;
 the Docker builder uses Rust 1.94. Native builds need PostgreSQL client development
-libraries (`libpq-dev` and `pkg-config` on Debian). PostgreSQL and RabbitMQ must
+libraries (`libpq-dev` and `pkg-config` on Debian). PostgreSQL, Redis, and RabbitMQ must
 be running, with a dedicated server database created.
 
 **Migration prerequisite:** `src/database/db.rs` uses `embed_migrations!()`.
@@ -78,6 +78,7 @@ the generated `src/database/schema.rs`. The Dockerfile also requires this direct
 | --- | --- |
 | `DATABASE_URL` | Required PostgreSQL URL for the server database |
 | `RABBITMQ_URL` | Defaults to `amqp://guest:guest@localhost:5672/%2F`; the resolver normalizes trailing-slash URLs for the default vhost |
+| `REDIS_URL` | Redis URL including credentials and database; defaults to `redis://localhost:6379/0` when unset or empty |
 | `RUST_LOG` | Optional logging filter; defaults to `info` |
 
 With migration files present and variables exported, run from `lin_server/`:
@@ -88,7 +89,13 @@ cargo run --locked
 
 Database connection setup also attempts to load `.env` through `dotenvy`, then
 runs pending embedded migrations. Keep local secrets out of Git; `.env` is not
-currently ignored by the root ignore file. `REDIS_URL` is not used by this service.
+currently ignored by the root ignore file. Redis setup lives in `controllers/redis_controller.rs`. Startup connects and checks
+`PING` within three seconds, failing startup if Redis is unavailable. A shared async
+connection manager is available as `web::Data<redis::aio::ConnectionManager>` to
+HTTP handlers, with three-second connection/response timeouts and reconnection
+support. Clone the manager for commands; no blocking connection or mutex is needed.
+Setup does not read or modify auth's `access_token:<user_id>` strings (15-minute
+TTL). Gateway/auth still own token validation.
 
 The root local Compose setup coordinates the gateway, auth, server, two PostgreSQL
 databases, Redis, and RabbitMQ using `docker compose up --build`. Compose and

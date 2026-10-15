@@ -11,7 +11,7 @@ mod database;
 mod handler;
 mod server;
 
-use crate::controllers::rabbitmq_controller;
+use crate::controllers::{rabbitmq_controller, redis_controller};
 
 pub use self::server::{ChatServer, ChatServerHandle};
 
@@ -74,6 +74,10 @@ async fn chat_ws(
 async fn main() -> io::Result<()> {
     env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
 
+    dotenvy::dotenv().ok();
+    let redis = web::Data::new(redis_controller::redis_connection().await?);
+    log::info!("Redis connection ready");
+
     log::info!("starting HTTP server at http://localhost:8080");
 
     let (chat_server, server_tx) = ChatServer::new();
@@ -98,6 +102,7 @@ async fn main() -> io::Result<()> {
 
     let http_server = HttpServer::new(move || {
         App::new()
+            .app_data(redis.clone())
             .app_data(web::Data::new(server_tx.clone()))
             // WebSocket UI HTML file
             .service(web::resource("/").to(index))

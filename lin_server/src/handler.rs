@@ -27,7 +27,7 @@ pub async fn chat_ws(
     let mut last_heartbeat = Instant::now();
     let mut interval = interval(HEARTBEAT_INTERVAL);
 
-    let (conn_tx, mut conn_rx) = mpsc::unbounded_channel();
+    let (conn_tx, mut conn_rx) = mpsc::channel(64);
 
     // unwrap: chat server is not dropped before the HTTP server
     let conn_id = chat_server.connect(conn_tx).await;
@@ -39,13 +39,13 @@ pub async fn chat_ws(
 
     let close_reason = loop {
         tokio::select! {
-            Some(Ok(msg)) = msg_stream.next() => {
-                log::debug!("msg: {msg:?}");
+            incoming = msg_stream.next() => {
+                let Some(Ok(msg)) = incoming else { break None; };
 
                 match msg {
                     AggregatedMessage::Ping(bytes) => {
                         last_heartbeat = Instant::now();
-                        session.pong(&bytes).await.unwrap();
+                        if session.pong(&bytes).await.is_err() { break None; }
                     }
 
                     AggregatedMessage::Pong(_) => {
@@ -53,7 +53,7 @@ pub async fn chat_ws(
                     }
 
                     AggregatedMessage::Text(text) => {
-                        process_text_msg(
+                        if process_text_msg(
                             &chat_server,
                             &mut session,
                             &text,
@@ -61,7 +61,7 @@ pub async fn chat_ws(
                             &mut name,
                             user_id,
                         )
-                        .await;
+                        .await.is_err() { break None; }
                     }
 
                     AggregatedMessage::Binary(_bin) => {
@@ -72,15 +72,16 @@ pub async fn chat_ws(
                 }
             }
 
-            Some(chat_msg) = conn_rx.recv() => {
-                 session.text(chat_msg).await.unwrap();
+            chat_msg = conn_rx.recv() => {
+                 let Some(chat_msg) = chat_msg else { break None; };
+                 if session.text(chat_msg).await.is_err() { break None; }
             }
 
             _ = interval.tick() => {
                 if Instant::now().duration_since(last_heartbeat) > CLIENT_TIMEOUT {
                     break None;
                 }
-                let _ = session.ping(b"").await;
+                if session.ping(b"").await.is_err() { break None; }
             }
 
             else => {
@@ -102,7 +103,7 @@ async fn process_text_msg(
     conn: ConnId,
     name: &mut Option<String>,
     user_id: i64,
-) {
+) -> Result<(), actix_ws::Closed> {
     // strip leading and trailing whitespace (spaces, newlines, etc.)
     let msg = text.trim();
 
@@ -118,7 +119,7 @@ async fn process_text_msg(
                 let rooms = chat_server.list_rooms().await;
 
                 for room in rooms {
-                    session.text(room.to_string()).await.unwrap();
+                    session.text(room.to_string()).await?;
                 }
             }
 
@@ -126,13 +127,17 @@ async fn process_text_msg(
                 Some(room) => {
                     log::info!("conn {conn}: joining room {room}");
 
-                    chat_server.join_room(conn, room.parse::<u64>().unwrap()).await;
-
-                    session.text(format!("joined {room}")).await.unwrap();
+                    match parse_room_id(room) {
+                        Some(room) => {
+                            chat_server.join_room(conn, room).await;
+                            session.text(format!("joined {room}")).await?;
+                        }
+                        None => session.text("!!! invalid room ID").await?,
+                    }
                 }
 
                 None => {
-                    session.text("!!! room name is required").await.unwrap();
+                    session.text("!!! room name is required").await?;
                 }
             },
 
@@ -141,7 +146,7 @@ async fn process_text_msg(
                     let title = title.trim().to_owned();
 
                     if title.is_empty() {
-                        session.text("!!! chat title is required").await.unwrap();
+                        session.text("!!! chat title is required").await?;
                     } else {
                         log::info!("conn {conn}: creating chat '{title}'");
 
@@ -159,23 +164,22 @@ async fn process_text_msg(
                                 chat_server.join_room(conn, chat.id as u64).await;
                                 session
                                     .text(format!("created chat {} \"{}\"", chat.id, chat.title))
-                                    .await
-                                    .unwrap();
+                                    .await?;
                             }
                             Ok(Err(err)) => {
                                 log::error!("conn {conn}: failed to create chat: {err}");
-                                session.text("failed to create chat").await.unwrap();
+                                session.text("failed to create chat").await?;
                             }
                             Err(err) => {
                                 log::error!("conn {conn}: chat creation task failed: {err}");
-                                session.text("failed to create chat").await.unwrap();
+                                session.text("failed to create chat").await?;
                             }
                         }
                     }
                 }
 
                 None => {
-                    session.text("chat title is required").await.unwrap();
+                    session.text("chat title is required").await?;
                 }
             },
 
@@ -185,15 +189,12 @@ async fn process_text_msg(
                     name.replace(new_name.to_owned());
                 }
                 None => {
-                    session.text("!!! name is required").await.unwrap();
+                    session.text("!!! name is required").await?;
                 }
             },
 
             _ => {
-                session
-                    .text(format!("!!! unknown command: {msg}"))
-                    .await
-                    .unwrap();
+                session.text(format!("!!! unknown command: {msg}")).await?;
             }
         }
     } else {
@@ -204,5 +205,34 @@ async fn process_text_msg(
         };
 
         chat_server.send_message(conn, msg).await
+    }
+    Ok(())
+}
+
+fn parse_room_id(value: &str) -> Option<u64> {
+    value
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .filter(|id| *id <= i64::MAX as u64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_room_id;
+
+    #[test]
+    fn room_ids_reject_malformed_and_out_of_database_range_values() {
+        for value in [
+            "",
+            "abc",
+            "-1",
+            "18446744073709551615",
+            "18446744073709551616",
+        ] {
+            assert_eq!(parse_room_id(value), None);
+        }
+        assert_eq!(parse_room_id(" 42 "), Some(42));
+        assert_eq!(parse_room_id("9223372036854775807"), Some(i64::MAX as u64));
     }
 }

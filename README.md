@@ -10,6 +10,8 @@
 
 🐋 NOTE: in every service there will be `docker-compose.yml`. I've added it to `.gitignore` because i have sensitive information in there. If you need these files for some reason, please open an issue. I will provide you with the structure of those files.
 
+See the [prioritized improvement plan](IMPROVEMENTS.md) for current gaps, live integration results, and acceptance checks.
+
 ### Approximate progress on alpha(0.1) version:
 
 - 🔐 lin_auth (Authentification service) - ![Progress](https://progress-bar.xyz/70)
@@ -19,8 +21,16 @@
 ### Global TODOs:
 
 - [ ] Consider changing ID generation logic to UUIDs for safety measures
-- [ ] Add tests
-- [ ] Create CI/CD pipeline after adding tests
+- [ ] Add chat membership and permissions(no arbitrary room joins)
+- [ ] Save messages, add history and reconnect recovery
+- [ ] Add refresh/logout and revoke active connections
+- [ ] Set up HTTPS and browser Origin checks
+- [ ] Add registration retries and RabbitMQ reconnect
+- [ ] Add rate limits and bound queues/database work
+- [ ] Add health checks and backup/restore checks
+- [ ] Add secret-free deployment templates and track migrations
+- [ ] Automate API and two-client chat tests
+- [ ] Create CI/CD pipeline
 - [ ] Build notification service(or look for completed solution)
 - [ ] Build client side lmao
 - [x] Chatroom creation

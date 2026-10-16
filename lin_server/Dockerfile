@@ -11,6 +11,7 @@ RUN USER=root cargo new --bin lin_server
 WORKDIR /app/lin_server
 COPY Cargo.toml Cargo.lock ./
 COPY migrations ./migrations
+COPY uuid_migrations ./uuid_migrations
 RUN cargo build --release
 COPY src ./src
 RUN touch src/main.rs

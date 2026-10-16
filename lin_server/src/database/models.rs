@@ -1,3 +1,4 @@
+use uuid::Uuid;
 //https://stackoverflow.com/questions/8351526/storing-chat-messages-inside-a-mysql-table?rq=4
 //ID IS NOT SHARED
 
@@ -9,7 +10,7 @@ use diesel::prelude::*;
 #[diesel(table_name = crate::database::schema::users)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct User {
-    pub id: i64,
+    pub id: Uuid,
     pub username: String,
     pub email: String,
     pub phone: Option<String>,
@@ -26,9 +27,8 @@ pub struct User {
 pub struct Chat {
     pub id: i64,
     pub title: String,
-    // I use Option because that it's joinable, so generated schema do not let me set strict
-    // i64, i'll need to change that later, or stick with it
-    pub admin: Option<i64>,
+    // The database permits chats without an administrator.
+    pub admin: Option<Uuid>,
     pub chat_img: Option<String>,
     pub bio: Option<String>,
     pub created_at: chrono::NaiveDateTime,
@@ -38,10 +38,10 @@ pub struct Chat {
 #[diesel(table_name = crate::database::schema::messages)]
 pub struct Message {
     pub id: i64,
-    pub chat_id: i64,
-    pub sender_id: i64,
-    pub body: String,
-    pub sent_at: NaiveDateTime,
+    pub chat_id: Option<i64>,
+    pub sender_id: Option<Uuid>,
+    pub body: Option<String>,
+    pub sent_at: Option<NaiveDateTime>,
     pub attachment: Option<String>,
 }
 
@@ -51,7 +51,7 @@ pub struct Message {
 pub struct NewMessage<'a> {
     pub id: &'a i64,
     pub chat_id: &'a i64,
-    pub sender_id: &'a i64,
+    pub sender_id: &'a Uuid,
     pub body: &'a str,
     pub sent_at: &'a NaiveDateTime,
     pub attachment: Option<&'a str>,
@@ -62,14 +62,14 @@ pub struct NewMessage<'a> {
 pub struct NewChat<'a> {
     pub id: &'a i64,
     pub title: &'a String,
-    pub admin: &'a i64,
+    pub admin: &'a Uuid,
     pub created_at: &'a NaiveDateTime,
 }
 
 #[derive(Insertable)]
 #[diesel(table_name = crate::database::schema::users)]
 pub struct NewUser<'a> {
-    pub id: &'a i64,
+    pub id: &'a Uuid,
     pub username: &'a str,
     pub email: &'a str,
     pub registred_at: &'a NaiveDateTime,

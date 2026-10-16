@@ -20,7 +20,7 @@ See the [prioritized improvement plan](IMPROVEMENTS.md) for current gaps, live i
 
 ### Global TODOs:
 
-- [ ] Consider changing ID generation logic to UUIDs for safety measures
+- [x] Use UUIDs for user identities across auth and messaging (see [migration guide](USER_UUID_MIGRATION.md))
 - [ ] Add chat membership and permissions(no arbitrary room joins)
 - [ ] Save messages, add history and reconnect recovery
 - [ ] Add refresh/logout and revoke active connections

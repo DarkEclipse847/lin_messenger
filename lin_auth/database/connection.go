@@ -23,6 +23,10 @@ func Connect() *gorm.DB {
 		zlog.Fatal().Msg("Failed to connect to auth database")
 	}
 
+	if err := migrateUserIDs(connection); err != nil {
+		zlog.Fatal().Msg("Failed to migrate user identities to UUID")
+	}
+
 	if err := connection.AutoMigrate(&models.User{}, &models.AuthCreds{}); err != nil {
 		zlog.Fatal().Msg("Failed to migrate auth database")
 	}

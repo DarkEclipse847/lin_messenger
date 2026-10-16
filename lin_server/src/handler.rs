@@ -1,4 +1,5 @@
 use std::time::{Duration, Instant};
+use uuid::Uuid;
 
 use actix_web::web;
 use actix_ws::AggregatedMessage;
@@ -19,7 +20,7 @@ pub async fn chat_ws(
     chat_server: ChatServerHandle,
     mut session: actix_ws::Session,
     msg_stream: actix_ws::MessageStream,
-    user_id: i64,
+    user_id: Uuid,
 ) {
     log::info!("connected");
 
@@ -102,7 +103,7 @@ async fn process_text_msg(
     text: &str,
     conn: ConnId,
     name: &mut Option<String>,
-    user_id: i64,
+    user_id: Uuid,
 ) -> Result<(), actix_ws::Closed> {
     // strip leading and trailing whitespace (spaces, newlines, etc.)
     let msg = text.trim();

@@ -5,7 +5,6 @@ import (
 	"errors"
 	goredis "github.com/redis/go-redis/v9"
 	"io"
-	"math"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v3"
+	"github.com/google/uuid"
 	"github.com/lin_auth/models"
 	"github.com/lin_auth/utils"
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -23,12 +23,12 @@ func TestRegistrationWireContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	user := models.User{Id: math.MaxInt64, Interaction_Type: "insert", Username: "alice", Email: "alice@example.test", Password: "must-not-be-published"}
+	user := models.User{Id: uuid.MustParse("550e8400-e29b-41d4-a716-446655440000"), Interaction_Type: "insert", Username: "alice", Email: "alice@example.test", Password: "must-not-be-published"}
 	msg, err := registrationMessage(&user)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Decode into RawMessage to preserve all 64 bits of the JSON integer.
+	// Compare the exact JSON wire fields.
 	var want, got map[string]json.RawMessage
 	if err := json.Unmarshal(fixture, &want); err != nil {
 		t.Fatal(err)
@@ -47,7 +47,7 @@ func TestRegistrationWireContract(t *testing.T) {
 	if msg.DeliveryMode != amqp.Persistent || msg.ContentType != "application/json" {
 		t.Fatal("event must be persistent JSON")
 	}
-	user.Id = 0
+	user.Id = uuid.Nil
 	if _, err := registrationMessage(&user); err == nil {
 		t.Fatal("invalid identity accepted")
 	}
@@ -131,19 +131,19 @@ func TestCookiesHaveSecurityFlagsAndMatchingLifetimes(t *testing.T) {
 
 func TestForwardedIdentityIsExact(t *testing.T) {
 	t.Setenv("JWT_SECRET", "test-only-secret-with-at-least-32-bytes")
-	token, err := utils.GenerateToken(math.MaxInt64, time.Now().Add(time.Minute).Unix())
+	token, err := utils.GenerateToken(uuid.MustParse("550e8400-e29b-41d4-a716-446655440000"), time.Now().Add(time.Minute).Unix())
 	if err != nil {
 		t.Fatal(err)
 	}
 	id, err := parseUserIDFromToken(token)
-	if err != nil || id != math.MaxInt64 {
-		t.Fatalf("identity corrupted: %d, %v", id, err)
+	if err != nil || id != uuid.MustParse("550e8400-e29b-41d4-a716-446655440000") {
+		t.Fatalf("identity corrupted: %s, %v", id, err)
 	}
 }
 
 func TestGatewayValidationChecksStoredSessionAndForwardsExactID(t *testing.T) {
 	t.Setenv("JWT_SECRET", "test-only-secret-with-at-least-32-bytes")
-	token, err := utils.GenerateToken(math.MaxInt64, time.Now().Add(time.Minute).Unix())
+	token, err := utils.GenerateToken(uuid.MustParse("550e8400-e29b-41d4-a716-446655440000"), time.Now().Add(time.Minute).Unix())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,9 +158,9 @@ func TestGatewayValidationChecksStoredSessionAndForwardsExactID(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			app := fiber.New()
 			app.Get("/api/auth/validate", func(c fiber.Ctx) error {
-				return validateSession(c, func(id int64) (string, error) {
-					if id != math.MaxInt64 {
-						t.Errorf("incorrect Redis lookup ID: %d", id)
+				return validateSession(c, func(id uuid.UUID) (string, error) {
+					if id != uuid.MustParse("550e8400-e29b-41d4-a716-446655440000") {
+						t.Errorf("incorrect Redis lookup ID: %s", id)
 					}
 					return tc.stored, tc.lookupErr
 				})
@@ -177,7 +177,7 @@ func TestGatewayValidationChecksStoredSessionAndForwardsExactID(t *testing.T) {
 			}
 			wantID := ""
 			if tc.status == 200 {
-				wantID = "9223372036854775807"
+				wantID = "550e8400-e29b-41d4-a716-446655440000"
 			}
 			if res.Header.Get("X-User-Id") != wantID {
 				t.Fatal("incorrect identity header")

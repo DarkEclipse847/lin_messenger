@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -38,22 +39,22 @@ func Initialize() error {
 	return err
 }
 
-func StoreAccessToken(userID int64, token string, ttl time.Duration) error {
+func StoreAccessToken(userID uuid.UUID, token string, ttl time.Duration) error {
 	client, err := sharedClient()
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), operationTimeout)
 	defer cancel()
-	return client.Set(ctx, fmt.Sprintf("access_token:%d", userID), token, ttl).Err()
+	return client.Set(ctx, fmt.Sprintf("access_token:%s", userID), token, ttl).Err()
 }
 
-func GetAccessToken(userID int64) (string, error) {
+func GetAccessToken(userID uuid.UUID) (string, error) {
 	client, err := sharedClient()
 	if err != nil {
 		return "", err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), operationTimeout)
 	defer cancel()
-	return client.Get(ctx, fmt.Sprintf("access_token:%d", userID)).Result()
+	return client.Get(ctx, fmt.Sprintf("access_token:%s", userID)).Result()
 }

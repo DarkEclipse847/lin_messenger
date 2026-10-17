@@ -8,15 +8,16 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 )
 
 const AccessTokenTTL = 15 * time.Minute
 const RefreshTokenTTL = 7 * 24 * time.Hour
 
-// Keep IDs as integers throughout decoding: float64 loses precision above 2^53.
+// UUID claims reject legacy numeric identities during the migration cutover.
 type TokenClaims struct {
-	UserID    int64  `json:"user_id"`
-	TokenType string `json:"token_type"`
+	UserID    uuid.UUID `json:"user_id"`
+	TokenType string    `json:"token_type"`
 	jwt.RegisteredClaims
 }
 
@@ -28,12 +29,12 @@ func SigningKey() ([]byte, error) {
 	return key, nil
 }
 
-func generateToken(id int64, expires int64, tokenType string) (string, error) {
+func generateToken(id uuid.UUID, expires int64, tokenType string) (string, error) {
 	key, err := SigningKey()
 	if err != nil {
 		return "", err
 	}
-	if id <= 0 {
+	if id == uuid.Nil {
 		return "", errors.New("invalid user ID")
 	}
 	var nonce [32]byte
@@ -51,7 +52,7 @@ func generateToken(id int64, expires int64, tokenType string) (string, error) {
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(key)
 }
 
-func GenerateToken(id int64, expires int64) (string, error) {
+func GenerateToken(id uuid.UUID, expires int64) (string, error) {
 	return generateToken(id, expires, "access")
 }
 
@@ -68,13 +69,13 @@ func ValidateToken(token string) (*jwt.Token, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !result.Valid || claims.UserID <= 0 || claims.TokenType != "access" || claims.ID == "" {
+	if !result.Valid || claims.UserID == uuid.Nil || claims.TokenType != "access" || claims.ID == "" {
 		return nil, errors.New("invalid access token claims")
 	}
 	return result, nil
 }
 
-func GenerateTokenPair(id int64) (string, string, error) {
+func GenerateTokenPair(id uuid.UUID) (string, string, error) {
 	now := time.Now()
 	access, err := generateToken(id, now.Add(AccessTokenTTL).Unix(), "access")
 	if err != nil {

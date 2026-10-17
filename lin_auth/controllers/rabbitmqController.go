@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/lin_auth/models"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/rs/zerolog/log"
@@ -21,7 +22,7 @@ func rabbitmqURL() string {
 }
 
 func registrationMessage(user *models.User) (amqp.Publishing, error) {
-	if user.Id <= 0 || user.Interaction_Type != "insert" {
+	if user.Id == uuid.Nil || user.Interaction_Type != "insert" {
 		return amqp.Publishing{}, errors.New("invalid registration event")
 	}
 	body, err := json.Marshal(user)

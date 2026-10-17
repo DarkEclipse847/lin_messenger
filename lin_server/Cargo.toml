@@ -13,9 +13,10 @@ tokio = {version = "1.49.0", features = ["rt", "time", "macros"] }
 
 serde = "1.0"
 serde_json = "1.0"
+uuid = { version = "1", features = ["serde"] }
 
 # sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "chrono"] }
-diesel = { version = "2.2.0", features = ["chrono", "postgres"] }
+diesel = { version = "2.2.0", features = ["chrono", "postgres", "uuid"] }
 diesel_migrations = "2.2.0"
 dotenvy = "0.15"
 

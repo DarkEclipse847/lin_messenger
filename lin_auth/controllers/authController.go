@@ -5,11 +5,11 @@ import (
 	"net/mail"
 	"net/url"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
+	"github.com/google/uuid"
 	"github.com/lin_auth/database"
 	"github.com/lin_auth/models"
 	r "github.com/lin_auth/redis"
@@ -52,14 +52,14 @@ func extractAccessToken(c fiber.Ctx) string {
 	return strings.TrimSpace(c.Cookies("access_token"))
 }
 
-func parseUserIDFromToken(token string) (int64, error) {
+func parseUserIDFromToken(token string) (uuid.UUID, error) {
 	parsed, err := utils.ValidateToken(token)
 	if err != nil {
-		return 0, err
+		return uuid.Nil, err
 	}
 	claims, ok := parsed.Claims.(*utils.TokenClaims)
 	if !ok {
-		return 0, errors.New("invalid token claims")
+		return uuid.Nil, errors.New("invalid token claims")
 	}
 	return claims.UserID, nil
 }
@@ -68,7 +68,7 @@ func Validate(c fiber.Ctx, db *gorm.DB) error {
 	return validateSession(c, r.GetAccessToken)
 }
 
-func validateSession(c fiber.Ctx, lookup func(int64) (string, error)) error {
+func validateSession(c fiber.Ctx, lookup func(uuid.UUID) (string, error)) error {
 	c.Set("Cache-Control", "no-store")
 	token := extractAccessToken(c)
 	if token == "" {
@@ -89,7 +89,7 @@ func validateSession(c fiber.Ctx, lookup func(int64) (string, error)) error {
 	if storedToken != token {
 		return fiber.ErrUnauthorized
 	}
-	c.Set("X-User-Id", strconv.FormatInt(userID, 10))
+	c.Set("X-User-Id", userID.String())
 	return c.SendStatus(fiber.StatusOK)
 }
 

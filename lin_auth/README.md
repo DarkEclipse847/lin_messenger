@@ -7,7 +7,7 @@ identities to `lin_server` through RabbitMQ. This is pre-alpha software.
 ## Request flow
 
 Registration hashes the password with Argon2id, creates the user through GORM,
-and publishes their profile to `REGISTRATION_REQ`. Registration and login then
+with a random UUIDv4 identity, and publishes their profile to `REGISTRATION_REQ`. Registration and login then
 issue an HS256 JWT pair: a 15-minute access token and a seven-day refresh token.
 The access token is stored at Redis key `access_token:<user_id>`; a SHA-256 hash
 of the refresh token is upserted in PostgreSQL. A later login replaces the stored
@@ -51,7 +51,8 @@ go run .
 ```
 
 The service binds to `:8000`; `APPLICATION_PORT` does not change it. Startup
-connects to PostgreSQL and runs GORM `AutoMigrate` for `User` and `AuthCreds`.
+connects to PostgreSQL and converts legacy user IDs to UUIDs, then runs GORM `AutoMigrate` for `User` and `AuthCreds`.
+See the [UUID migration guide](../USER_UUID_MIGRATION.md) before upgrading an existing deployment.
 Environment variables must be exported explicitly; this service does not load
 a `.env` file. Use HTTPS for the browser cookie flow because cookies are Secure.
 
@@ -67,7 +68,7 @@ persistent JSON through RabbitMQ's default exchange using that queue name as the
 routing key. It waits for publisher confirmation and checks for unroutable returns:
 
 ```json
-{"interaction_type":"insert","id":42,"username":"alice","email":"alice@example.test"}
+{"interaction_type":"insert","id":"550e8400-e29b-41d4-a716-446655440000","username":"alice","email":"alice@example.test"}
 ```
 
 The Rust consumer preserves this user ID in its own profile database. Passwords
@@ -97,7 +98,7 @@ exists, but refresh and logout endpoints are not implemented.
 
 ## Hardening changes and compatibility
 
-Tokens now require HS256, expiry, a positive int64 identity, a unique `jti`, and
+Tokens now require HS256, expiry, a non-nil UUID identity, a unique `jti`, and
 an access-token purpose for validation. Existing tokens must be replaced by logging
 in again. Registration validates usernames (3–32 ASCII letters/digits/underscores),
 bare email addresses (up to 254 bytes), and passwords (8–1024 bytes). Login requires

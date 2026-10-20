@@ -5,7 +5,7 @@ diesel::table! {
         id -> Int8,
         title -> Text,
         chat_img -> Nullable<Text>,
-        admin -> Nullable<Int8>,
+        admin -> Nullable<Uuid>,
         bio -> Nullable<Text>,
         created_at -> Timestamp,
     }
@@ -14,17 +14,17 @@ diesel::table! {
 diesel::table! {
     messages (id) {
         id -> Int8,
-        chat_id -> Int8,
-        sender_id -> Int8,
-        body -> Text,
-        sent_at -> Timestamp,
+        chat_id -> Nullable<Int8>,
+        sender_id -> Nullable<Uuid>,
+        body -> Nullable<Text>,
+        sent_at -> Nullable<Timestamp>,
         attachment -> Nullable<Text>,
     }
 }
 
 diesel::table! {
     users (id) {
-        id -> Int8,
+        id -> Uuid,
         username -> Text,
         email -> Text,
         phone -> Nullable<Text>,

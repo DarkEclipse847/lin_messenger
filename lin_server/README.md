@@ -12,7 +12,7 @@ a dedicated RabbitMQ consumer thread. `server.rs` owns sessions and room members
 `handler.rs` handles each WebSocket session and text commands. Synchronous chat
 creation runs through `web::block`.
 
-`GET /chat` upgrades to WebSocket only when `X-User-Id` parses as an `i64`.
+`GET /chat` upgrades to WebSocket only when `X-User-Id` parses as a non-nil UUID.
 The intended gateway flow is:
 
 1. Nginx validates the caller's cookie or bearer token with
@@ -88,7 +88,8 @@ cargo run --locked
 ```
 
 Database connection setup also attempts to load `.env` through `dotenvy`, then
-runs pending embedded migrations. Keep local secrets out of Git; `.env` is not
+runs pending embedded migrations, followed by the tracked `uuid_migrations/` migration.
+See the [UUID migration guide](../USER_UUID_MIGRATION.md) before upgrading existing databases. Keep local secrets out of Git; `.env` is not
 currently ignored by the root ignore file. Redis setup lives in `controllers/redis_controller.rs`. Startup connects and checks
 `PING` within three seconds, failing startup if Redis is unavailable. A shared async
 connection manager is available as `web::Data<redis::aio::ConnectionManager>` to

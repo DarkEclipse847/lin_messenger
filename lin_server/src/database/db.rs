@@ -4,8 +4,11 @@ use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 use dotenvy::dotenv;
 use rand::RngExt;
 use std::env;
+use uuid::Uuid;
 
 use crate::database::models::{Chat, Message, NewChat, NewMessage, NewUser, User};
+
+pub const UUID_MIGRATIONS: EmbeddedMigrations = embed_migrations!("uuid_migrations");
 
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!();
 
@@ -29,6 +32,9 @@ pub fn establish_connection() -> PgConnection {
     conn.run_pending_migrations(MIGRATIONS)
         .expect("Failed to run database migrations");
 
+    conn.run_pending_migrations(UUID_MIGRATIONS)
+        .expect("Failed to migrate user identities to UUID");
+
     conn
 }
 
@@ -51,7 +57,7 @@ pub fn establish_connection() -> PgConnection {
 
 pub fn new_user(
     conn: &mut PgConnection,
-    new_id: i64,
+    new_id: Uuid,
     new_username: String,
     new_email: String,
 ) -> Result<User, Error> {
@@ -74,7 +80,7 @@ pub fn create_chat(
     conn: &mut PgConnection,
     new_id: i64,
     new_title: String,
-    new_admin: i64,
+    new_admin: Uuid,
 ) -> Result<Chat, Error> {
     use crate::database::schema::chats;
 
@@ -95,7 +101,7 @@ pub fn create_message(
     conn: &mut PgConnection,
     new_id: i64,
     new_chat_id: i64,
-    new_sender_id: i64,
+    new_sender_id: Uuid,
     new_body: String,
     new_attachment: Option<&str>,
 ) -> Result<Message, Error> {
@@ -122,7 +128,7 @@ pub fn create_message(
 /// Registration redelivery is safe only when the existing identity matches.
 pub fn replicate_user(
     conn: &mut PgConnection,
-    id: i64,
+    id: Uuid,
     username: String,
     email: String,
 ) -> Result<(), Error> {
@@ -150,3 +156,7 @@ pub fn replicate_user(
         Ok(())
     })
 }
+
+#[cfg(test)]
+#[path = "db_test.rs"]
+mod uuid_migration_tests;

@@ -33,8 +33,8 @@ and `lin_server/NOTES.md` include proposals, not implemented contracts.
   changes between `lin_auth/models/user.go` and
   `lin_server/src/controllers/models.rs`.
 - The auth-generated user ID is preserved in the server database. Connection IDs
-  and room IDs are `u64`; persisted user/chat IDs are `i64`. A connection ID is not
-  an authenticated user ID. UUID migration is a proposal, not current behavior.
+  and room IDs are `u64`; persisted user IDs are UUIDs, while chat/message IDs remain `i64`. A connection
+  ID is not an authenticated user ID. See `USER_UUID_MIGRATION.md` for the coordinated cutover.
 - Auth signs JWTs with `JWT_SECRET`. Access tokens expire after 15 minutes and must
   match Redis key `access_token:<user_id>`; refresh tokens expire after seven days
   and only their SHA-256 hashes are persisted in PostgreSQL. There is currently
@@ -60,7 +60,8 @@ and `lin_server/NOTES.md` include proposals, not implemented contracts.
   Avoid unrelated formatting churn in this unfinished codebase.
 - Treat `lin_server/src/database/schema.rs` as Diesel-generated. Database changes
   need SQL migrations, matching models, and regenerated schema, not just edits to
-  the generated file. Auth currently uses GORM `AutoMigrate` on startup.
+  the generated file. Auth runs its embedded legacy user-ID migration before GORM `AutoMigrate` on startup.
+  The server applies tracked `uuid_migrations/` after the local baseline migrations.
 - Preserve Argon2id password hashing, hashed refresh-token storage, and HTTP-only,
   Secure cookies. Do not log credentials or tokens, or copy local secrets into
   documentation, fixtures, or tracked configuration.

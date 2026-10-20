@@ -1,4 +1,5 @@
 use std::time::{Duration, Instant};
+use uuid::Uuid;
 
 use actix_web::web;
 use actix_ws::AggregatedMessage;
@@ -19,7 +20,7 @@ pub async fn chat_ws(
     chat_server: ChatServerHandle,
     mut session: actix_ws::Session,
     msg_stream: actix_ws::MessageStream,
-    user_id: i64,
+    user_id: Uuid,
 ) {
     log::info!("connected");
 
@@ -102,7 +103,7 @@ async fn process_text_msg(
     text: &str,
     conn: ConnId,
     name: &mut Option<String>,
-    user_id: i64,
+    user_id: Uuid,
 ) -> Result<(), actix_ws::Closed> {
     // strip leading and trailing whitespace (spaces, newlines, etc.)
     let msg = text.trim();
@@ -218,21 +219,5 @@ fn parse_room_id(value: &str) -> Option<u64> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::parse_room_id;
-
-    #[test]
-    fn room_ids_reject_malformed_and_out_of_database_range_values() {
-        for value in [
-            "",
-            "abc",
-            "-1",
-            "18446744073709551615",
-            "18446744073709551616",
-        ] {
-            assert_eq!(parse_room_id(value), None);
-        }
-        assert_eq!(parse_room_id(" 42 "), Some(42));
-        assert_eq!(parse_room_id("9223372036854775807"), Some(i64::MAX as u64));
-    }
-}
+#[path = "handler_test.rs"]
+mod tests;

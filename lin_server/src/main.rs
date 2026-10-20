@@ -1,3 +1,4 @@
+use uuid::Uuid;
 // Multi-room WebSocket chat server.
 
 use std::io;
@@ -36,12 +37,12 @@ async fn index() -> actix_web::Result<NamedFile> {
 // nginx then forwards that header on to us (see `nginx/nginx.conf`). lin_server trusts
 // this header rather than re-validating the token itself. Network policy MUST prevent
 // clients from reaching this listener directly.
-fn authenticated_user_id(req: &HttpRequest) -> Option<i64> {
+fn authenticated_user_id(req: &HttpRequest) -> Option<Uuid> {
     req.headers()
         .get("X-User-Id")
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<i64>().ok())
-        .filter(|id| *id > 0)
+        .and_then(|value| value.parse::<Uuid>().ok())
+        .filter(|id| !id.is_nil())
 }
 
 // Handshake and start WebSocket handler with heartbeats.
@@ -130,25 +131,5 @@ async fn main() -> io::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use actix_web::test::TestRequest;
-
-    #[test]
-    fn identity_requires_a_positive_database_id() {
-        assert_eq!(
-            authenticated_user_id(&TestRequest::default().to_http_request()),
-            None
-        );
-        for value in ["0", "-1", "abc", "9223372036854775808"] {
-            let req = TestRequest::default()
-                .insert_header(("X-User-Id", value))
-                .to_http_request();
-            assert_eq!(authenticated_user_id(&req), None);
-        }
-        let req = TestRequest::default()
-            .insert_header(("X-User-Id", "42"))
-            .to_http_request();
-        assert_eq!(authenticated_user_id(&req), Some(42));
-    }
-}
+#[path = "main_test.rs"]
+mod tests;

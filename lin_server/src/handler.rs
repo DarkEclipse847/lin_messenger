@@ -31,7 +31,7 @@ pub async fn chat_ws(
     let (conn_tx, mut conn_rx) = mpsc::channel(64);
 
     // unwrap: chat server is not dropped before the HTTP server
-    let conn_id = chat_server.connect(conn_tx).await;
+    let conn_id = chat_server.connect(user_id, conn_tx).await;
 
     let mut msg_stream = msg_stream
         .max_frame_size(128 * 1024)
@@ -117,10 +117,13 @@ async fn process_text_msg(
             "/list" => {
                 log::info!("conn {conn}: listing rooms");
 
-                let rooms = chat_server.list_rooms().await;
-
-                for room in rooms {
-                    session.text(room.to_string()).await?;
+                match chat_server.list_rooms(conn).await {
+                    Ok(rooms) => {
+                        for room in rooms {
+                            session.text(room.to_string()).await?;
+                        }
+                    }
+                    Err(err) => session.text(err.to_string()).await?,
                 }
             }
 
@@ -129,10 +132,10 @@ async fn process_text_msg(
                     log::info!("conn {conn}: joining room {room}");
 
                     match parse_room_id(room) {
-                        Some(room) => {
-                            chat_server.join_room(conn, room).await;
-                            session.text(format!("joined {room}")).await?;
-                        }
+                        Some(room) => match chat_server.join_room(conn, room).await {
+                            Ok(()) => session.text(format!("joined {room}")).await?,
+                            Err(err) => session.text(err.to_string()).await?,
+                        },
                         None => session.text("!!! invalid room ID").await?,
                     }
                 }
@@ -162,10 +165,13 @@ async fn process_text_msg(
 
                         match result {
                             Ok(Ok(chat)) => {
-                                chat_server.join_room(conn, chat.id as u64).await;
+                                let joined = chat_server.join_room(conn, chat.id as u64).await;
                                 session
                                     .text(format!("created chat {} \"{}\"", chat.id, chat.title))
                                     .await?;
+                                if let Err(err) = joined {
+                                    session.text(err.to_string()).await?;
+                                }
                             }
                             Ok(Err(err)) => {
                                 log::error!("conn {conn}: failed to create chat: {err}");
@@ -182,6 +188,25 @@ async fn process_text_msg(
                 None => {
                     session.text("chat title is required").await?;
                 }
+            },
+
+            "/add" | "/remove" => match cmd_args.next().and_then(parse_member_args) {
+                Some((room, target)) => {
+                    let add = msg.split_whitespace().next() == Some("/add");
+                    match chat_server.change_member(conn, room, target, add).await {
+                        Ok(()) => {
+                            session
+                                .text(if add {
+                                    "member added"
+                                } else {
+                                    "member removed"
+                                })
+                                .await?
+                        }
+                        Err(err) => session.text(err.to_string()).await?,
+                    }
+                }
+                None => session.text("!!! expected <chat ID> <user UUID>").await?,
             },
 
             "/name" => match cmd_args.next() {
@@ -205,9 +230,25 @@ async fn process_text_msg(
             None => msg.to_owned(),
         };
 
-        chat_server.send_message(conn, msg).await
+        if let Err(err) = chat_server.send_message(conn, msg).await {
+            session.text(err.to_string()).await?;
+        }
     }
     Ok(())
+}
+
+fn parse_member_args(value: &str) -> Option<(u64, Uuid)> {
+    let mut args = value.split_whitespace();
+    let room = parse_room_id(args.next()?)?;
+    let user = args
+        .next()?
+        .parse::<Uuid>()
+        .ok()
+        .filter(|id| !id.is_nil())?;
+    if args.next().is_some() {
+        return None;
+    }
+    Some((room, user))
 }
 
 fn parse_room_id(value: &str) -> Option<u64> {
@@ -215,18 +256,35 @@ fn parse_room_id(value: &str) -> Option<u64> {
         .trim()
         .parse::<u64>()
         .ok()
-        .filter(|id| *id <= i64::MAX as u64)
+        .filter(|id| *id > 0 && *id <= i64::MAX as u64)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::parse_room_id;
+    use super::{parse_member_args, parse_room_id};
+
+    #[test]
+    fn member_commands_require_exactly_a_chat_and_non_nil_user() {
+        let user = "550e8400-e29b-41d4-a716-446655440000";
+        assert!(parse_member_args(&format!("42 {user}")).is_some());
+        for args in [
+            "".to_owned(),
+            "42".into(),
+            format!("0 {user}"),
+            "42 invalid".into(),
+            "42 00000000-0000-0000-0000-000000000000".into(),
+            format!("42 {user} extra"),
+        ] {
+            assert!(parse_member_args(&args).is_none());
+        }
+    }
 
     #[test]
     fn room_ids_reject_malformed_and_out_of_database_range_values() {
         for value in [
             "",
             "abc",
+            "0",
             "-1",
             "18446744073709551615",
             "18446744073709551616",

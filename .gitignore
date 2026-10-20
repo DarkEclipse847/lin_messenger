@@ -7,5 +7,5 @@ compose.yaml
 
 node_modules/
 
-/lin_server/migrations/
+/lin_server/migrations/.diesel_lock
 /lin_server/target

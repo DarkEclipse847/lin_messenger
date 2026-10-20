@@ -129,7 +129,7 @@ Source: [auth publisher](lin_auth/controllers/rabbitmqController.go),
 
 | Improvement | Evidence / reason | Acceptance check |
 | --- | --- | --- |
-| Deliver secret-free deployment templates and reviewed migrations | Compose, Nginx configuration and Rust migrations exist locally but are ignored; a fresh clone cannot reproduce this stack | A fresh checkout builds and boots using documented placeholder configuration and disposable volumes; no local credentials are committed |
+| Deliver secret-free deployment templates | Compose and Nginx configuration exist locally but are ignored; Rust migrations are tracked, but a fresh clone still cannot reproduce the deployment | A fresh checkout builds and boots using documented placeholder configuration and disposable volumes; no local credentials are committed |
 | Turn live probes into integration tests and CI | Successful manual scripts currently live only in `/tmp` | CI runs Go/Rust checks and gateway registration, replication and two-client exchange with readiness polling, isolated data and automatic cleanup |
 | Separate liveness from readiness | HTTP can remain available after consumer failure; `/` returns 404 and is not a health endpoint | Health endpoints have documented semantics; dependency/consumer failures affect readiness without unnecessary liveness restart loops |
 | Pool and bound database work | Chat creation opens a new synchronous connection and runs migration checks through `establish_connection` | Run migrations in a controlled startup/deploy step; use bounded pools, statement/connection timeouts and blocking workers; DB outages return controlled errors |

@@ -38,10 +38,10 @@ production certification. The current service must not host private conversation
    can still consume substantial memory. Add byte budgets, rate/admission limits,
    database pooling/timeouts, and socket write deadlines. Slow clients are evicted
    when a queue fills; buffered messages may drain before their socket closes.
-6. **High: builds and deployment are not reproducible**. Migrations, gateway and
-   Compose configuration are ignored. Supply reviewed, secret-free deployment
-   templates and tracked migrations through a deliberate repository change. Do not
-   infer migration history from schema.rs. Add CI using disposable PostgreSQL and
+6. **High: builds and deployment are not reproducible**. Gateway and Compose
+   configuration are ignored. SQL migrations are now tracked in `migrations/`.
+   Supply reviewed, secret-free deployment templates through a deliberate
+   repository change. Do not infer migration history from schema.rs. Add CI using disposable PostgreSQL and
    RabbitMQ, backups/restore drills, observability and load/failure testing.
 
 ## Changes made

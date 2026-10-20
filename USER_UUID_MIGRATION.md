@@ -29,8 +29,8 @@ Existing mismatched or missing replicated profiles are not reconciled by this mi
    binaries/images together. This is a maintenance-window change, not a rolling upgrade.
 3. Start the updated services while keeping public traffic stopped. Auth applies
    `lin_auth/database/migrations/001_user_uuid.sql` before GORM AutoMigrate.
-   Server applies the existing local `migrations/`, then the tracked
-   `lin_server/uuid_migrations/2026-10-17-000000_user_uuid/` through Diesel.
+   Server applies the tracked `lin_server/migrations/` through Diesel, including
+   `2026-10-17-000000_user_uuid/` after the baseline schema.
    Auth detects an already converted column; Diesel records the applied version.
 4. Verify the user/reference columns are UUIDs in both databases, check the
    registration consumer is alive, and exercise registration/login and chat creation.
@@ -38,10 +38,10 @@ Existing mismatched or missing replicated profiles are not reconciled by this mi
    refresh-token hashes are cleared, and old Redis keys expire naturally.
 
 An empty database is supported: auth creates UUID columns through AutoMigrate;
-server creates its baseline schema and immediately converts it. The server's
-baseline `migrations/` is still locally supplied and ignored by Git. The new
-`uuid_migrations/` is separate so the UUID upgrade is delivered without adding
-local deployment files. Docker copies both migration directories.
+server creates its baseline schema and immediately converts it. All server migrations are tracked in
+`lin_server/migrations/`, which Docker also copies. Consolidating the directories
+does not change migration version IDs: existing Diesel migration records remain
+valid, so already applied migrations are skipped.
 
 UUIDs created after migration have no integer equivalent. The server down migration
 fails deliberately; rollback requires stopping both updated services and restoring

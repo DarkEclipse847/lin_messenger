@@ -14,14 +14,15 @@ See the [prioritized improvement plan](IMPROVEMENTS.md) for current gaps, live i
 
 ### Approximate progress on alpha(0.1) version:
 
-- 🔐 lin_auth (Authentification service) - ![Progress](https://progress-bar.xyz/70)
-- 🖧 lin_server (Actix websocket server) - ![Progress](https://progress-bar.xyz/32)
+- 🔐 lin_auth (Authentification service) - ![Progress](https://progress-bar.xyz/78)
+- 🖧 lin_server (Actix websocket server) - ![Progress](https://progress-bar.xyz/40)
 - 🔥 lin_client (Crossplatform Tauri client app) - ![Progress](https://progress-bar.xyz/0)
 
 ### Global TODOs:
 
 - [x] Use UUIDs for user identities across auth and messaging (see [migration guide](USER_UUID_MIGRATION.md))
-- [ ] Add chat membership and permissions(no arbitrary room joins)
+- [x] Add chat membership and permissions(no arbitrary room joins)
+- [x] Make migrations folder avaliable for github 
 - [ ] Save messages, add history and reconnect recovery
 - [ ] Add refresh/logout and revoke active connections
 - [ ] Set up HTTPS and browser Origin checks

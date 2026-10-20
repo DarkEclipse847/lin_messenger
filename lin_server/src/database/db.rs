@@ -8,8 +8,6 @@ use uuid::Uuid;
 
 use crate::database::models::{Chat, Message, NewChat, NewMessage, NewUser, User};
 
-pub const UUID_MIGRATIONS: EmbeddedMigrations = embed_migrations!("uuid_migrations");
-
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!();
 
 /// Generates a random, positive `i64` for use as a `chats`/`messages` primary key.
@@ -22,18 +20,19 @@ pub fn generate_id() -> i64 {
     ((bits >> 1) as i64).max(1)
 }
 
-pub fn establish_connection() -> PgConnection {
+pub fn open_connection() -> ConnectionResult<PgConnection> {
     dotenv().ok();
+    let url = env::var("DATABASE_URL")
+        .map_err(|_| ConnectionError::BadConnection("DATABASE_URL must be set".into()))?;
+    PgConnection::establish(&url)
+}
 
-    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let mut conn = PgConnection::establish(&database_url)
-        .unwrap_or_else(|_| panic!("Error connecting to server database"));
+pub fn establish_connection() -> PgConnection {
+    let mut conn =
+        open_connection().unwrap_or_else(|_| panic!("Error connecting to server database"));
 
     conn.run_pending_migrations(MIGRATIONS)
         .expect("Failed to run database migrations");
-
-    conn.run_pending_migrations(UUID_MIGRATIONS)
-        .expect("Failed to migrate user identities to UUID");
 
     conn
 }
@@ -91,10 +90,20 @@ pub fn create_chat(
         created_at: &Utc::now().naive_utc(),
     };
 
-    return diesel::insert_into(chats::table)
-        .values(&new_chat)
-        .returning(Chat::as_returning())
-        .get_result(conn);
+    conn.transaction(|conn| {
+        let chat = diesel::insert_into(chats::table)
+            .values(&new_chat)
+            .returning(Chat::as_returning())
+            .get_result(conn)?;
+        use crate::database::schema::chat_members;
+        diesel::insert_into(chat_members::table)
+            .values((
+                chat_members::chat_id.eq(new_id),
+                chat_members::user_id.eq(new_admin),
+            ))
+            .execute(conn)?;
+        Ok(chat)
+    })
 }
 
 pub fn create_message(
@@ -164,6 +173,36 @@ mod uuid_migration_tests {
 
     #[test]
     #[ignore = "requires LIN_TEST_DATABASE_URL pointing to disposable PostgreSQL"]
+    fn consolidated_migrations_initialize_a_fresh_database_once() {
+        let mut conn =
+            PgConnection::establish(&std::env::var("LIN_TEST_DATABASE_URL").unwrap()).unwrap();
+        let result = conn.transaction::<(), Error, _>(|conn| {
+            conn.batch_execute(&format!(
+                "CREATE SCHEMA fresh_migrations_{}; SET LOCAL search_path TO fresh_migrations_{}",
+                std::process::id(),
+                std::process::id()
+            ))?;
+            let applied = conn.run_pending_migrations(MIGRATIONS).unwrap();
+            assert_eq!(applied.len(), 6);
+            assert!(conn.run_pending_migrations(MIGRATIONS).unwrap().is_empty());
+            let id = Uuid::from_u128(42);
+            new_user(conn, id, "fresh".into(), "fresh@example.test".into())?;
+            create_chat(conn, 1, "fresh chat".into(), id)?;
+            use crate::database::schema::chat_members;
+            assert_eq!(
+                chat_members::table
+                    .find((1_i64, id))
+                    .count()
+                    .get_result::<i64>(conn)?,
+                1
+            );
+            Err(Error::RollbackTransaction)
+        });
+        assert!(matches!(result, Err(Error::RollbackTransaction)));
+    }
+
+    #[test]
+    #[ignore = "requires LIN_TEST_DATABASE_URL pointing to disposable PostgreSQL"]
     fn migrate_existing_users_and_references() {
         let mut conn =
             PgConnection::establish(&std::env::var("LIN_TEST_DATABASE_URL").unwrap()).unwrap();
@@ -175,8 +214,8 @@ mod uuid_migration_tests {
             conn.batch_execute("INSERT INTO users(id,username,email,registred_at) VALUES (42,'alice','alice@example.test',now()),(9223372036854775807,'bob','bob@example.test',now());
                 INSERT INTO chats(id,title,admin,created_at) VALUES (1,'legacy',42,now()),(2,'nullable',NULL,now());
                 INSERT INTO messages(id,chat_id,sender_id,body,sent_at) VALUES (1,1,9223372036854775807,'preserved',now())")?;
-            conn.run_pending_migrations(UUID_MIGRATIONS).unwrap();
-            conn.run_pending_migrations(UUID_MIGRATIONS).unwrap();
+            conn.run_pending_migrations(MIGRATIONS).unwrap();
+            conn.run_pending_migrations(MIGRATIONS).unwrap();
             use crate::database::schema::{chats, messages, users};
             let alice = Uuid::parse_str("016939df-e261-3cd7-8cd6-4ae01aa40c54").unwrap();
             let bob = Uuid::parse_str("96af6c64-b564-3e3d-831b-d2cbd5a82f28").unwrap();

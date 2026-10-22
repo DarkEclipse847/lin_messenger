@@ -260,6 +260,7 @@ fn parse_room_id(value: &str) -> Option<u64> {
 }
 
 #[cfg(test)]
+<<<<<<< HEAD
 mod tests {
     use super::{parse_member_args, parse_room_id};
 
@@ -295,3 +296,7 @@ mod tests {
         assert_eq!(parse_room_id("9223372036854775807"), Some(i64::MAX as u64));
     }
 }
+=======
+#[path = "handler_test.rs"]
+mod tests;
+>>>>>>> c7849b3464baff43be3359b1bc85d2f2ffce65a7

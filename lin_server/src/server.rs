@@ -288,6 +288,7 @@ impl ChatServerHandle {
 }
 
 #[cfg(test)]
+<<<<<<< HEAD
 mod tests {
     use super::*;
     use std::sync::Mutex;
@@ -739,3 +740,7 @@ mod tests {
         }
     }
 }
+=======
+#[path = "server_test.rs"]
+mod tests;
+>>>>>>> c7849b3464baff43be3359b1bc85d2f2ffce65a7

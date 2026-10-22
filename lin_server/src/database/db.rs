@@ -167,6 +167,7 @@ pub fn replicate_user(
 }
 
 #[cfg(test)]
+<<<<<<< HEAD
 mod uuid_migration_tests {
     use super::*;
     use diesel::connection::SimpleConnection;
@@ -236,3 +237,7 @@ mod uuid_migration_tests {
         assert!(matches!(result, Err(Error::RollbackTransaction)));
     }
 }
+=======
+#[path = "db_test.rs"]
+mod uuid_migration_tests;
+>>>>>>> c7849b3464baff43be3359b1bc85d2f2ffce65a7

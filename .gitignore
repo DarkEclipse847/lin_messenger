@@ -6,6 +6,7 @@ compose.yaml
 .vscode
 
 node_modules/
+contracts/
 
 /lin_server/migrations/
 /lin_server/target

@@ -186,6 +186,9 @@ impl ChatServer {
         if !members.contains(&user) {
             return Err(AccessError::Denied);
         }
+        let body = msg.clone();
+        self.query(move |store| store.save_message(room, user, body))
+            .await?;
         for id in recipients {
             if let Some(session) = self.sessions.get(&id) {
                 if session.tx.try_send(msg.clone()).is_err() {
@@ -288,7 +291,6 @@ impl ChatServerHandle {
 }
 
 #[cfg(test)]
-<<<<<<< HEAD
 mod tests {
     use super::*;
     use std::sync::Mutex;
@@ -297,8 +299,23 @@ mod tests {
     struct Store {
         members: Mutex<HashMap<RoomId, Vec<Uuid>>>,
         unavailable: std::sync::atomic::AtomicBool,
+        save_failed: std::sync::atomic::AtomicBool,
+        messages: Mutex<Vec<(RoomId, Uuid, String)>>,
     }
     impl MembershipStore for Store {
+        fn save_message(
+            &self,
+            room: RoomId,
+            sender: Uuid,
+            body: String,
+        ) -> Result<(), AccessError> {
+            if self.save_failed.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(AccessError::SaveFailed);
+            }
+            self.messages.lock().unwrap().push((room, sender, body));
+            Ok(())
+        }
+
         fn rooms(&self, user: Uuid) -> Result<Vec<RoomId>, AccessError> {
             if self.unavailable.load(std::sync::atomic::Ordering::Relaxed) {
                 return Err(AccessError::Unavailable);
@@ -355,6 +372,42 @@ mod tests {
         ]);
         let (server, _) = ChatServer::with_store(store.clone());
         (server, store)
+    }
+
+    #[tokio::test]
+    async fn messages_are_saved_once_before_delivery_and_failures_do_not_broadcast() {
+        let (mut server, store) = fixture();
+        let (a, mut ar) = connect(&mut server, 1);
+        let (b, mut br) = connect(&mut server, 2);
+        assert_eq!(
+            server.send_message(a, "no room".into()).await,
+            Err(AccessError::NoRoom)
+        );
+        assert!(store.messages.lock().unwrap().is_empty());
+        server.join_room(a, 10).await.unwrap();
+        server.join_room(b, 10).await.unwrap();
+        server.send_message(a, "Alice: hello".into()).await.unwrap();
+        assert_eq!(
+            *store.messages.lock().unwrap(),
+            vec![(10, Uuid::from_u128(1), "Alice: hello".into())]
+        );
+        assert_eq!(br.try_recv().unwrap(), "Alice: hello");
+        assert!(ar.try_recv().is_err());
+        store
+            .save_failed
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(
+            server.send_message(a, "lost".into()).await,
+            Err(AccessError::SaveFailed)
+        );
+        assert!(br.try_recv().is_err());
+        assert_eq!(store.messages.lock().unwrap().len(), 1);
+        store
+            .save_failed
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        server.disconnect(b);
+        server.send_message(a, "alone".into()).await.unwrap();
+        assert_eq!(store.messages.lock().unwrap().len(), 2);
     }
 
     #[tokio::test]
@@ -549,7 +602,7 @@ mod tests {
     async fn postgres_websocket_membership_survives_restart() {
         use crate::database::{
             db,
-            schema::{chats, users},
+            schema::{chats, messages, users},
         };
         use actix_web::{App, HttpServer, web};
         use diesel::prelude::*;
@@ -670,10 +723,44 @@ mod tests {
             actor.abort();
             let _ = actor.await;
             persisted_room = Some(result.unwrap());
+            let room = persisted_room.unwrap() as i64;
+            web::block(move || {
+                let mut conn = db::open_connection().unwrap();
+                let saved = messages::table
+                    .filter(messages::chat_id.eq(room))
+                    .order(messages::sent_at)
+                    .select((messages::sender_id, messages::body))
+                    .load::<(Option<Uuid>, Option<String>)>(&mut conn)
+                    .unwrap();
+                let mut expected = vec![(
+                    Some(Uuid::from_u128(bob_id)),
+                    Some("persisted membership".into()),
+                )];
+                if restart {
+                    expected.extend([
+                        (
+                            Some(Uuid::from_u128(alice_id)),
+                            Some("after restart".into()),
+                        ),
+                        (
+                            Some(Uuid::from_u128(alice_id)),
+                            Some("private after removal".into()),
+                        ),
+                    ]);
+                }
+                assert_eq!(saved, expected);
+            })
+            .await
+            .unwrap();
         }
         // Failed assertions leave evidence only in the explicitly disposable database.
         web::block(move || {
             let mut conn = db::open_connection().unwrap();
+            diesel::delete(
+                messages::table.filter(messages::chat_id.eq(persisted_room.unwrap() as i64)),
+            )
+            .execute(&mut conn)
+            .unwrap();
             diesel::delete(chats::table.find(persisted_room.unwrap() as i64))
                 .execute(&mut conn)
                 .unwrap();
@@ -740,7 +827,3 @@ mod tests {
         }
     }
 }
-=======
-#[path = "server_test.rs"]
-mod tests;
->>>>>>> c7849b3464baff43be3359b1bc85d2f2ffce65a7

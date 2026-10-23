@@ -52,14 +52,15 @@ go run .
 
 The service binds to `:8000`; `APPLICATION_PORT` does not change it. Startup
 connects to PostgreSQL and converts legacy user IDs to UUIDs, then runs GORM `AutoMigrate` for `User` and `AuthCreds`.
-See the [UUID migration guide](../USER_UUID_MIGRATION.md) before upgrading an existing deployment.
+The [embedded UUID migration](database/migrations/001_user_uuid.sql) converts
+legacy identities using the same mapping as the server. Existing numeric-ID
+tokens are rejected; affected users must sign in again.
 Environment variables must be exported explicitly; this service does not load
 a `.env` file. Use HTTPS for the browser cookie flow because cookies are Secure.
 
 The repository's local root Compose file can coordinate the services via
-`docker compose up --build`, but it and the Nginx configuration are ignored by
-Git and are not included in a fresh clone. See the [server setup notes](../lin_server/README.md)
-for the additional migration prerequisite. Do not commit deployment credentials.
+`docker compose up --build`, but it and the Nginx configuration are untracked and are not included in a fresh clone. See the [server setup notes](../lin_server/README.md)
+for server setup and migration commands. Do not commit deployment credentials.
 
 ## Registration event
 
@@ -98,11 +99,10 @@ exists, but refresh and logout endpoints are not implemented.
 
 ## Hardening changes and compatibility
 
-Tokens now require HS256, expiry, a non-nil UUID identity, a unique `jti`, and
+Tokens require HS256, expiry, a non-nil UUID identity, a unique `jti`, and
 an access-token purpose for validation. Existing tokens must be replaced by logging
 in again. Registration validates usernames (3–32 ASCII letters/digits/underscores),
 bare email addresses (up to 254 bytes), and passwords (8–1024 bytes). Login requires
 exactly one identifier. The HTTP request-body limit is 16 KiB.
 
-See [the production review](PRODUCTION_REVIEW.md) for verified bugs, cross-service
-contracts, deployment compatibility, remaining blockers, and validation limits.
+See [the production review](PRODUCTION_REVIEW.md) for remaining limitations and validation scope.

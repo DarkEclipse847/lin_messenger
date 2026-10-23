@@ -14,19 +14,22 @@ pub enum AccessError {
     Denied,
     Unavailable,
     NoRoom,
+    SaveFailed,
 }
 
 impl std::fmt::Display for AccessError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::Denied => "!!! chat access denied",
-            Self::Unavailable => "!!! chat permissions unavailable",
-            Self::NoRoom => "!!! join a chat first",
+            Self::Denied => "Access to chat denied",
+            Self::Unavailable => "Chat permissions unavailable",
+            Self::SaveFailed => "Message could not be saved",
+            Self::NoRoom => "Please join a chat first",
         })
     }
 }
 
 pub trait MembershipStore: Send + Sync + std::fmt::Debug {
+    fn save_message(&self, room: RoomId, sender: Uuid, body: String) -> Result<(), AccessError>;
     fn rooms(&self, user: Uuid) -> Result<Vec<RoomId>, AccessError>;
     fn members(&self, room: RoomId) -> Result<Vec<Uuid>, AccessError>;
     fn change(&self, room: RoomId, actor: Uuid, target: Uuid, add: bool)
@@ -37,6 +40,15 @@ pub trait MembershipStore: Send + Sync + std::fmt::Debug {
 pub struct PostgresMembership;
 
 impl MembershipStore for PostgresMembership {
+    fn save_message(&self, room: RoomId, sender: Uuid, body: String) -> Result<(), AccessError> {
+        save_message(
+            &mut db::open_connection().map_err(|_| AccessError::SaveFailed)?,
+            room,
+            sender,
+            body,
+        )
+    }
+
     fn rooms(&self, user: Uuid) -> Result<Vec<RoomId>, AccessError> {
         chat_members::table
             .filter(chat_members::user_id.eq(user))
@@ -75,6 +87,35 @@ impl MembershipStore for PostgresMembership {
             add,
         )
     }
+}
+
+// Serialize authorization and insertion with membership changes on the same chat.
+pub fn save_message(
+    conn: &mut PgConnection,
+    room: RoomId,
+    sender: Uuid,
+    body: String,
+) -> Result<(), AccessError> {
+    let room = i64::try_from(room).map_err(|_| AccessError::Denied)?;
+    conn.transaction::<_, diesel::result::Error, _>(|conn| {
+        let chat = chats::table
+            .find(room)
+            .select(chats::id)
+            .for_update()
+            .first::<i64>(conn)
+            .optional()?;
+        if chat.is_none()
+            || !diesel::select(diesel::dsl::exists(
+                chat_members::table.find((room, sender)),
+            ))
+            .get_result::<bool>(conn)?
+        {
+            return Ok(Err(AccessError::Denied));
+        }
+        db::create_message(conn, db::generate_id(), room, sender, body, None)?;
+        Ok(Ok(()))
+    })
+    .map_err(|_| AccessError::SaveFailed)?
 }
 
 pub fn change_member(
@@ -128,6 +169,42 @@ pub fn change_member(
 mod tests {
     use super::*;
     use diesel::connection::SimpleConnection;
+
+    #[test]
+    #[ignore = "requires LIN_TEST_DATABASE_URL pointing to disposable PostgreSQL"]
+    fn messages_persist_identity_body_and_time_and_reject_non_members() {
+        use super::super::{models::Message, schema::messages};
+        use diesel_migrations::MigrationHarness;
+        let mut conn =
+            PgConnection::establish(&std::env::var("LIN_TEST_DATABASE_URL").unwrap()).unwrap();
+        let result = conn.transaction::<(), diesel::result::Error, _>(|conn| {
+            conn.batch_execute(&format!("CREATE SCHEMA message_test_{}; SET LOCAL search_path TO message_test_{}", std::process::id(), std::process::id()))?;
+            conn.run_pending_migrations(db::MIGRATIONS).unwrap();
+            let alice = Uuid::from_u128(1);
+            let bob = Uuid::from_u128(2);
+            db::new_user(conn, alice, "alice".into(), "alice@example.test".into())?;
+            db::new_user(conn, bob, "bob".into(), "bob@example.test".into())?;
+            db::create_chat(conn, 10, "chat".into(), alice)?;
+            assert_eq!(save_message(conn, 10, bob, "denied".into()), Err(AccessError::Denied));
+            assert_eq!(save_message(conn, 999, alice, "missing".into()), Err(AccessError::Denied));
+            let before = chrono::Utc::now().naive_utc();
+            save_message(conn, 10, alice, "Alice: hello".into()).unwrap();
+            save_message(conn, 10, alice, "second".into()).unwrap();
+            let saved = messages::table.order(messages::sent_at).select(Message::as_select()).load::<Message>(conn)?;
+            assert_eq!(saved.len(), 2);
+            assert_ne!(saved[0].id, saved[1].id);
+            assert!(saved.iter().all(|m| m.id > 0 && m.chat_id == Some(10) && m.sender_id == Some(alice) && m.sent_at.unwrap() >= before && m.attachment.is_none()));
+            assert_eq!(saved[0].body.as_deref(), Some("Alice: hello"));
+            conn.batch_execute("CREATE FUNCTION reject_message() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'test failure'; END $$; CREATE TRIGGER reject_message BEFORE INSERT ON messages FOR EACH ROW EXECUTE FUNCTION reject_message()")?;
+            assert_eq!(save_message(conn, 10, alice, "failed".into()), Err(AccessError::SaveFailed));
+            assert_eq!(messages::table.count().get_result::<i64>(conn)?, 2);
+            Err(diesel::result::Error::RollbackTransaction)
+        });
+        assert!(matches!(
+            result,
+            Err(diesel::result::Error::RollbackTransaction)
+        ));
+    }
 
     #[test]
     #[ignore = "requires LIN_TEST_DATABASE_URL pointing to disposable PostgreSQL"]

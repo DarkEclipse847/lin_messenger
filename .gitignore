@@ -1,0 +1,27 @@
+# Local deployment configuration
+compose.yaml
+compose.yml
+docker-compose.yaml
+docker-compose.yml
+/nginx/
+/contracts/
+
+# Local secrets (keep example configuration trackable)
+.env
+.env.*
+!.env.example
+!.env.sample
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Dependencies and build output
+node_modules/
+/lin_server/target/
+/lin_auth/lin_auth
+
+# Diesel's generated lock; SQL migrations remain tracked
+/lin_server/migrations/.diesel_lock

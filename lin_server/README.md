@@ -2,14 +2,14 @@
 
 Lin's pre-alpha WebSocket chat service uses Rust 2024, Actix Web/WS, Tokio,
 Diesel/PostgreSQL, and Lapin/RabbitMQ. It manages live rooms in memory, persists
-chat creation, and consumes user profiles from the separate authentication service.
+chat creation and messages, and consumes user profiles from the separate authentication service.
 
 ## Architecture and authentication
 
 `src/main.rs` starts the HTTP server on `0.0.0.0:8080`, a `ChatServer` task, and
 a dedicated RabbitMQ consumer thread. `server.rs` owns sessions and room membership;
 `ChatServerHandle` sends commands through MPSC channels and awaits oneshot replies.
-`handler.rs` handles each WebSocket session and text commands. Synchronous chat creation and permission queries run through `web::block`.
+`handler.rs` handles each WebSocket session and text commands. Synchronous chat creation, message inserts, and permission queries run through `web::block`.
 
 `GET /chat` upgrades to WebSocket only when `X-User-Id` parses as a non-nil UUID.
 The intended gateway flow is:
@@ -37,7 +37,7 @@ whitespace is trimmed.
 | `/add <chat ID> <user UUID>` | Admin only: adds a replicated user to the chat (idempotent) |
 | `/remove <chat ID> <user UUID>` | Admin only: removes a member and evicts all their active connections from that chat (idempotent); the admin cannot remove themself |
 | `/name <name>` | Sets a connection-local display prefix; does not change the user profile |
-| Other text | Broadcasts to other connections in the current room; the sender receives no echo |
+| Other text | Saves to PostgreSQL, then broadcasts to other connections in the current room; the sender receives no echo |
 
 New connections start without a room. Create a chat or join one you belong to
 before sending messages. Chat creation inserts both the chat and its creator's
@@ -50,13 +50,13 @@ It checks persisted permissions for joins, lists, and every broadcast (both send
 and recipients), and fails closed when the database is unavailable. Removal and
 broadcasts are serialized by this processor. Frames already queued before removal
 may still arrive. Live rooms disappear when empty or on restart; persisted
-membership survives. Chat messages themselves are still not stored.
+membership and saved messages survive. Each message is committed before broadcast, including when the sender is alone. A failed insert replies `Message could not be saved` and does not broadcast.
 
 The membership migration backfills existing administrators only. Legacy chats
 without an administrator remain inaccessible until explicitly repaired by an
 operator; historical participation is not treated as authorization. Room `0` is
-no longer a shared lobby. Errors use `!!! chat access denied`,
-`!!! chat permissions unavailable`, or `!!! join a chat first`.
+no longer a shared lobby. Permission errors use `Access to chat denied`,
+`Chat permissions unavailable`, or `Please join a chat first`.
 
 For example, Alice sends `/create project`, then `/add <chat ID> <Bob UUID>`.
 Bob can now discover the chat with `/list`, join it, and exchange messages with
@@ -76,10 +76,13 @@ with the auth service's ID. A user must exist here before chat creation can
 satisfy the administrator foreign key.
 
 The consumer acknowledges successfully persisted deliveries and handles identical
-redeliveries idempotently, but does not reconnect after failures. Synchronization is incomplete. Chat messages
-are broadcast only: the database message helper is not wired into the WebSocket
-flow and uses its supplied `new_id` argument. Message history and attachments
-are not implemented.
+redeliveries idempotently, but does not reconnect after failures. Synchronization is incomplete. Messages store a generated positive i64 ID, chat ID,
+authenticated sender UUID, UTC timestamp, and the broadcast text (including any
+connection-local `/name` prefix); attachment is NULL. Authorization and insertion
+share a transaction that locks the chat against concurrent membership changes.
+Message history, reconnect recovery, and attachments
+are not implemented. A committed message can survive a failed live delivery;
+there are no delivery acknowledgments or retry deduplication yet.
 
 ## Run locally
 
@@ -109,8 +112,10 @@ Database connection setup also attempts to load `.env` through `dotenvy`, then
 runs pending embedded migrations from `migrations/` in version order.
 Permission queries open a database connection on a blocking worker without rerunning migrations;
 connection pooling is not implemented.
-See the [UUID migration guide](../USER_UUID_MIGRATION.md) before upgrading existing databases. Keep local secrets out of Git; `.env` is not
-currently ignored by the root ignore file. Redis setup lives in `controllers/redis_controller.rs`. Startup connects and checks
+The [UUID migration](migrations/2026-10-17-000000_user_uuid/up.sql) preserves
+legacy references with the same identity mapping as auth. Its rollback deliberately
+fails: recovery requires coordinated database backups. Keep local secrets out of Git;
+the root `.gitignore` excludes `.env` files while allowing `.env.example` and `.env.sample`. Redis setup lives in `controllers/redis_controller.rs`. Startup connects and checks
 `PING` within three seconds, failing startup if Redis is unavailable. A shared async
 connection manager is available as `web::Data<redis::aio::ConnectionManager>` to
 HTTP handlers, with three-second connection/response timeouts and reconnection
@@ -120,7 +125,7 @@ TTL). Gateway/auth still own token validation.
 
 The root local Compose setup coordinates the gateway, auth, server, two PostgreSQL
 databases, Redis, and RabbitMQ using `docker compose up --build`. Compose and
-`nginx/` are ignored and must be supplied separately on a fresh clone. The image
+`nginx/` are untracked and must be supplied separately on a fresh clone. The image
 includes the server binary but no HTML UI: `/` tries to open `static/index.html`,
 which is absent from the tracked repository. Use `/chat` with a WebSocket client.
 
@@ -196,5 +201,5 @@ For schema changes, add SQL migrations, regenerate the Diesel schema using
 `diesel.toml`, and update models together. See the repository [agent guide](../AGENTS.md)
 for service boundaries and contribution checks.
 
-See [the production review](PRODUCTION_REVIEW.md) for security blockers, changes
-and the integration validation still required before deployment.
+See [the production review](PRODUCTION_REVIEW.md) for remaining limitations
+and integration validation required before deployment.

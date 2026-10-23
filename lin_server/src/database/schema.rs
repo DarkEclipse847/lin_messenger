@@ -1,6 +1,13 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
+    chat_members (chat_id, user_id) {
+        chat_id -> Int8,
+        user_id -> Uuid,
+    }
+}
+
+diesel::table! {
     chats (id) {
         id -> Int8,
         title -> Text,
@@ -35,8 +42,10 @@ diesel::table! {
     }
 }
 
+diesel::joinable!(chat_members -> chats (chat_id));
+diesel::joinable!(chat_members -> users (user_id));
 diesel::joinable!(chats -> users (admin));
 diesel::joinable!(messages -> chats (chat_id));
 diesel::joinable!(messages -> users (sender_id));
 
-diesel::allow_tables_to_appear_in_same_query!(chats, messages, users,);
+diesel::allow_tables_to_appear_in_same_query!(chat_members, chats, messages, users,);

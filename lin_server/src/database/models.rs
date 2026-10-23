@@ -74,3 +74,10 @@ pub struct NewUser<'a> {
     pub email: &'a str,
     pub registred_at: &'a NaiveDateTime,
 }
+
+#[derive(Queryable, Selectable, Insertable, Debug)]
+#[diesel(table_name = crate::database::schema::chat_members)]
+pub struct ChatMember {
+    pub chat_id: i64,
+    pub user_id: Uuid,
+}

@@ -61,7 +61,14 @@ and `lin_server/NOTES.md` include proposals, not implemented contracts.
 - Treat `lin_server/src/database/schema.rs` as Diesel-generated. Database changes
   need SQL migrations, matching models, and regenerated schema, not just edits to
   the generated file. Auth runs its embedded legacy user-ID migration before GORM `AutoMigrate` on startup.
-  The server applies tracked `uuid_migrations/` after the local baseline migrations.
+  The server applies all tracked SQL migrations from `lin_server/migrations/` in version order.
+- Generate new server migrations from `lin_server/` with
+  `diesel migration generate <descriptive_snake_case_name>`. Keep the generated
+  timestamped directory under `migrations/`, with `up.sql` applying the change and
+  `down.sql` reverting it. Do not introduce separate migration roots or rename
+  already applied migration versions. Add a new migration for subsequent changes.
+  If reversal is impossible, make `down.sql` fail explicitly and document recovery.
+  Validate against disposable PostgreSQL, regenerate `schema.rs`, and update models.
 - Preserve Argon2id password hashing, hashed refresh-token storage, and HTTP-only,
   Secure cookies. Do not log credentials or tokens, or copy local secrets into
   documentation, fixtures, or tracked configuration.
@@ -91,9 +98,10 @@ unless dependencies were available and the flows were actually exercised.
 
 ## Local setup and current limitations
 
-- Root `compose.yaml`, `nginx/`, and `lin_server/migrations/` are ignored by Git.
-  They exist in this working copy but are not delivered in a fresh clone. Do not
-  force-add local deployment files or secrets. Document missing prerequisites.
+- Root `compose.yaml` and `nginx/` are ignored by Git. They exist in this working
+  copy but are not delivered in a fresh clone. Do not force-add local deployment
+  files or secrets. Server SQL migrations are tracked in `lin_server/migrations/`;
+  only the generated `.diesel_lock` file is ignored.
 - Rust embeds migrations at compile time and its Dockerfile copies them. Missing
   migrations block reproducible builds; `schema.rs` is not a substitute for SQL.
 - Go listens on port 8000; Rust listens on 8080. `APPLICATION_PORT` is not read by

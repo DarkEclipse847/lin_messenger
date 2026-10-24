@@ -16,11 +16,11 @@ inspect the implementation, verify behavior, and report limitations honestly.
 | `lin_auth/` | Credentials, login, registration, session validation | Go, Fiber v3, GORM, PostgreSQL, Redis |
 | `lin_server/` | WebSocket connections, rooms, chat records, replicated user profiles | Rust 2024, Actix Web/WS, Tokio, Diesel, PostgreSQL, Lapin |
 | `lin_client/` | Future desktop/mobile messenger UI; currently the greeting template | React 19, TypeScript, Vite, Tauri 2 |
-| `nginx/` | Local gateway configuration; ignored by Git | Nginx |
+| `nginx/` | Local gateway configuration; not tracked | Nginx |
 
 There is no root build workspace. Run commands in the relevant service directory.
 Read the service READMEs and actual source before changing behavior; root TODOs
-and `lin_server/NOTES.md` include proposals, not implemented contracts.
+include proposals, not implemented contracts.
 
 ## Architectural contracts
 
@@ -34,7 +34,7 @@ and `lin_server/NOTES.md` include proposals, not implemented contracts.
   `lin_server/src/controllers/models.rs`.
 - The auth-generated user ID is preserved in the server database. Connection IDs
   and room IDs are `u64`; persisted user IDs are UUIDs, while chat/message IDs remain `i64`. A connection
-  ID is not an authenticated user ID. See `USER_UUID_MIGRATION.md` for the coordinated cutover.
+  ID is not an authenticated user ID.
 - Auth signs JWTs with `JWT_SECRET`. Access tokens expire after 15 minutes and must
   match Redis key `access_token:<user_id>`; refresh tokens expire after seven days
   and only their SHA-256 hashes are persisted in PostgreSQL. There is currently
@@ -98,10 +98,10 @@ unless dependencies were available and the flows were actually exercised.
 
 ## Local setup and current limitations
 
-- Root `compose.yaml` and `nginx/` are ignored by Git. They exist in this working
+- Root `compose.yaml` and `nginx/` are not tracked. They exist in this working
   copy but are not delivered in a fresh clone. Do not force-add local deployment
   files or secrets. Server SQL migrations are tracked in `lin_server/migrations/`;
-  only the generated `.diesel_lock` file is ignored.
+  the generated `.diesel_lock` file is not part of the migration history.
 - Rust embeds migrations at compile time and its Dockerfile copies them. Missing
   migrations block reproducible builds; `schema.rs` is not a substitute for SQL.
 - Go listens on port 8000; Rust listens on 8080. `APPLICATION_PORT` is not read by
@@ -109,8 +109,9 @@ unless dependencies were available and the flows were actually exercised.
   manager with HTTP workers; token validation remains in auth.
 - The Rust `/` handler expects `static/index.html`, which is not checked in or
   copied into its image. It is not a usable bundled chat UI or health check.
-- Rooms and message broadcasts are in memory. `/create` persists a chat, but
-  ordinary messages are not persisted and `/join` does not enforce membership.
+- Live rooms are in memory. `/create` persists a chat and creator membership;
+  `/join`, `/list`, and message delivery enforce persisted membership. Messages
+  are saved before broadcast. History and reconnect recovery are not implemented.
 - Registration publishing remains best effort despite persistent messages and
   publisher confirms. The Rust consumer acknowledges successful persistence,
   accepts matching duplicate registrations, and rejects invalid events without

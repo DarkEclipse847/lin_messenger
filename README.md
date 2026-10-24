@@ -10,8 +10,6 @@
 
 🐋 NOTE: in every service there will be `docker-compose.yml`. I've added it to `.gitignore` because i have sensitive information in there. If you need these files for some reason, please open an issue. I will provide you with the structure of those files.
 
-See the [prioritized improvement plan](IMPROVEMENTS.md) for current gaps, live integration results, and acceptance checks.
-
 ### Approximate progress on alpha(0.1) version:
 
 - 🔐 lin_auth (Authentification service) - ![Progress](https://progress-bar.xyz/78)
@@ -20,7 +18,7 @@ See the [prioritized improvement plan](IMPROVEMENTS.md) for current gaps, live i
 
 ### Global TODOs:
 
-- [x] Use UUIDs for user identities across auth and messaging (see [migration guide](USER_UUID_MIGRATION.md))
+- [x] Use UUIDs for user identities across auth and messaging
 - [x] Add chat membership and permissions(no arbitrary room joins)
 - [x] Make migrations folder avaliable for github 
 - [ ] Save messages, add history and reconnect recovery

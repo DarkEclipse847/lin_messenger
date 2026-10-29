@@ -26,6 +26,7 @@ diesel::table! {
         body -> Nullable<Text>,
         sent_at -> Nullable<Timestamp>,
         attachment -> Nullable<Text>,
+        sequence -> Int8,
     }
 }
 

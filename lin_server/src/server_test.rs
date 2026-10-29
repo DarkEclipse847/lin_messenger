@@ -1,4 +1,5 @@
 use super::*;
+use crate::database::models::Message;
 use std::sync::Mutex;
 
 #[derive(Debug, Default)]
@@ -9,12 +10,48 @@ struct Store {
     messages: Mutex<Vec<(RoomId, Uuid, String)>>,
 }
 impl MembershipStore for Store {
-    fn save_message(&self, room: RoomId, sender: Uuid, body: String) -> Result<(), AccessError> {
+    fn save_message(
+        &self,
+        room: RoomId,
+        sender: Uuid,
+        body: String,
+    ) -> Result<Message, AccessError> {
         if self.save_failed.load(std::sync::atomic::Ordering::Relaxed) {
             return Err(AccessError::SaveFailed);
         }
-        self.messages.lock().unwrap().push((room, sender, body));
-        Ok(())
+        let mut messages = self.messages.lock().unwrap();
+        messages.push((room, sender, body.clone()));
+        Ok(test_message(messages.len() as i64, room, sender, body))
+    }
+
+    fn history(
+        &self,
+        room: RoomId,
+        user: Uuid,
+        after: i64,
+        limit: usize,
+    ) -> Result<HistoryPage, AccessError> {
+        if !self.members(room)?.contains(&user) {
+            return Err(AccessError::Denied);
+        }
+        let messages = self.messages.lock().unwrap();
+        let rows: Vec<_> = messages
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.0 == room)
+            .map(|(i, m)| test_message(i as i64 + 1, m.0, m.1, m.2.clone()))
+            .collect();
+        if after != 0 && !rows.iter().any(|m| m.sequence == after) {
+            return Err(AccessError::InvalidCursor);
+        }
+        let mut messages: Vec<_> = rows.into_iter().filter(|m| m.sequence > after).collect();
+        let has_more = messages.len() > limit;
+        messages.truncate(limit);
+        Ok(HistoryPage {
+            next_cursor: messages.last().map_or(after, |m| m.sequence),
+            messages,
+            has_more,
+        })
     }
 
     fn rooms(&self, user: Uuid) -> Result<Vec<RoomId>, AccessError> {
@@ -262,14 +299,14 @@ async fn websocket_membership_flow() {
         let mut bob = WsClient::connect(address, 2);
         let mut bob_other_device = WsClient::connect(address, 2);
         alice.command("/join 10", "joined 10");
-        bob.command("/join 10", "!!! chat access denied");
+        bob.command("/join 10", "Access to chat denied");
         // /list has no end marker: a subsequent error delimits its output.
         bob.send("/list");
-        bob.command("/join 999", "!!! chat access denied");
-        bob.command("hello", "!!! join a chat first");
+        bob.command("/join 999", "Access to chat denied");
+        bob.command("hello", "Please join a chat first");
         bob.command(
             "/add 10 00000000-0000-0000-0000-000000000002",
-            "!!! chat access denied",
+            "Access to chat denied",
         );
         alice.command(
             "/add 10 00000000-0000-0000-0000-000000000002",
@@ -286,10 +323,10 @@ async fn websocket_membership_flow() {
             "member removed",
         );
         alice.send("private");
-        bob.command("/join 10", "!!! chat access denied");
-        bob_other_device.command("blocked", "!!! join a chat first");
+        bob.command("/join 10", "Access to chat denied");
+        bob_other_device.command("blocked", "Please join a chat first");
         bob.send("/list");
-        bob.command("/join 10", "!!! chat access denied");
+        bob.command("/join 10", "Access to chat denied");
     })
     .await;
     stop.stop(true).await;
@@ -354,7 +391,7 @@ async fn postgres_websocket_membership_survives_restart() {
             let mut bob = WsClient::connect(address, bob_id);
             let mut bob_device = WsClient::connect(address, bob_id);
             if !restart {
-                bob.command("hello", "!!! join a chat first");
+                bob.command("hello", "Please join a chat first");
                 alice.send("/create docker-membership");
                 let created = alice.text();
                 assert!(created.starts_with("created chat "), "{created}");
@@ -366,10 +403,10 @@ async fn postgres_websocket_membership_survives_restart() {
                     .unwrap();
                 alice.command("/list", &room.to_string());
                 bob.send("/list");
-                bob.command(&format!("/join {room}"), "!!! chat access denied");
+                bob.command(&format!("/join {room}"), "Access to chat denied");
                 bob.command(
                     &format!("/add {room} {}", Uuid::from_u128(bob_id)),
-                    "!!! chat access denied",
+                    "Access to chat denied",
                 );
                 alice.command(
                     &format!("/add {room} {}", Uuid::from_u128(bob_id)),
@@ -392,16 +429,35 @@ async fn postgres_websocket_membership_survives_restart() {
                     client.command("/list", &room.to_string());
                     client.command(&format!("/join {room}"), &format!("joined {room}"));
                 }
+                // Recovery after an actor restart reads the committed pre-restart message.
+                bob_device.send(&format!("/resume {room} 0 1"));
+                let replay: serde_json::Value = serde_json::from_str(&bob_device.text()).unwrap();
+                assert_eq!(replay["type"], "resume");
+                assert_eq!(replay["messages"][0]["body"], "persisted membership");
+                assert_eq!(replay["has_more"], false);
                 alice.send("after restart");
                 assert_eq!(bob.text(), "after restart");
-                assert_eq!(bob_device.text(), "after restart");
+                let live: serde_json::Value = serde_json::from_str(&bob_device.text()).unwrap();
+                assert_eq!(live["body"], "after restart");
+                // A new authenticated socket can resume from its last processed cursor.
+                drop(bob_device);
+                let mut bob_device = WsClient::connect(address, bob_id);
+                bob_device.send(&format!(
+                    "/resume {room} {}",
+                    replay["next_cursor"].as_str().unwrap()
+                ));
+                let recovered: serde_json::Value =
+                    serde_json::from_str(&bob_device.text()).unwrap();
+                assert_eq!(recovered["messages"].as_array().unwrap().len(), 1);
+                assert_eq!(recovered["messages"][0], live);
+                assert_eq!(recovered["has_more"], false);
                 bob.command(
                     &format!("/remove {room} {}", Uuid::from_u128(alice_id)),
-                    "!!! chat access denied",
+                    "Access to chat denied",
                 );
                 alice.command(
                     &format!("/remove {room} {}", Uuid::from_u128(alice_id)),
-                    "!!! chat access denied",
+                    "Access to chat denied",
                 );
                 alice.command(
                     &format!("/remove {room} {}", Uuid::from_u128(bob_id)),
@@ -410,11 +466,11 @@ async fn postgres_websocket_membership_survives_restart() {
                 // Delimit the no-echo broadcast before checking revoked receivers.
                 alice.send("private after removal");
                 alice.command("/list", &room.to_string());
-                bob.command(&format!("/join {room}"), "!!! chat access denied");
-                bob_device.command("blocked", "!!! join a chat first");
+                bob.command(&format!("/join {room}"), "Access to chat denied");
+                bob_device.command("blocked", "Please join a chat first");
                 let mut reconnected = WsClient::connect(address, bob_id);
                 reconnected.send("/list");
-                reconnected.command(&format!("/join {room}"), "!!! chat access denied");
+                reconnected.command(&format!("/join {room}"), "Access to chat denied");
                 room
             }
         })
@@ -512,8 +568,22 @@ impl WsClient {
         loop {
             let mut header = [0; 2];
             self.0.read_exact(&mut header).unwrap();
-            assert!(header[1] < 126);
-            let mut data = vec![0; header[1] as usize];
+            assert_eq!(header[1] & 128, 0);
+            let len = match header[1] {
+                126 => {
+                    let mut bytes = [0; 2];
+                    self.0.read_exact(&mut bytes).unwrap();
+                    u16::from_be_bytes(bytes) as usize
+                }
+                127 => {
+                    let mut bytes = [0; 8];
+                    self.0.read_exact(&mut bytes).unwrap();
+                    usize::try_from(u64::from_be_bytes(bytes)).unwrap()
+                }
+                n => n as usize,
+            };
+            assert!(len <= 16 * 1024 * 1024);
+            let mut data = vec![0; len];
             self.0.read_exact(&mut data).unwrap();
             match header[0] & 15 {
                 1 => return String::from_utf8(data).unwrap(),
@@ -526,4 +596,111 @@ impl WsClient {
         self.send(command);
         assert_eq!(self.text(), expected, "command: {command}");
     }
+}
+
+fn test_message(sequence: i64, room: RoomId, sender: Uuid, body: String) -> Message {
+    Message {
+        sequence,
+        id: 10000 - sequence,
+        chat_id: Some(room as i64),
+        sender_id: Some(sender),
+        body: Some(body),
+        sent_at: Some(chrono::Utc::now().naive_utc()),
+        attachment: None,
+    }
+}
+
+#[tokio::test]
+async fn recovery_pages_then_live_delivery_include_own_messages_and_survive_restart() {
+    let (mut server, store) = fixture();
+    let (a, _ar) = connect(&mut server, 1);
+    server.join_room(a, 10).await.unwrap();
+    for body in ["one", "two", "three"] {
+        server.send_message(a, body.into()).await.unwrap();
+    }
+    let (b, mut br) = connect(&mut server, 2);
+    let first = server.history(b, 10, 0, 2, true).await.unwrap();
+    assert!(first.has_more);
+    assert_eq!(first.next_cursor, 2);
+    assert!(!server.rooms[&10].contains(&b));
+    server
+        .send_message(a, "during replay".into())
+        .await
+        .unwrap();
+    assert!(br.try_recv().is_err());
+    let last = server
+        .history(b, 10, first.next_cursor, 2, true)
+        .await
+        .unwrap();
+    assert!(!last.has_more);
+    assert_eq!(
+        last.messages
+            .iter()
+            .map(|m| m.body.as_deref().unwrap())
+            .collect::<Vec<_>>(),
+        ["three", "during replay"]
+    );
+    server.send_message(a, "live".into()).await.unwrap();
+    let live: serde_json::Value = serde_json::from_str(&br.try_recv().unwrap()).unwrap();
+    assert_eq!(live["cursor"], "5");
+    server.send_message(b, "own message".into()).await.unwrap();
+    let own: serde_json::Value = serde_json::from_str(&br.try_recv().unwrap()).unwrap();
+    assert_eq!(own["cursor"], "6");
+    server.disconnect(b);
+    server.send_message(a, "offline".into()).await.unwrap();
+    // Nothing from the old actor is needed: only persisted data and the client cursor.
+    let (mut restarted, _) = ChatServer::with_store(store);
+    let (b, _) = connect(&mut restarted, 2);
+    let page = restarted.history(b, 10, 6, 50, true).await.unwrap();
+    assert_eq!(page.messages.len(), 1);
+    assert_eq!(page.messages[0].body.as_deref(), Some("offline"));
+    assert!(!page.has_more);
+    assert!(restarted.rooms[&10].contains(&b));
+    assert!(
+        restarted
+            .history(b, 10, 7, 50, true)
+            .await
+            .unwrap()
+            .messages
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn history_enforces_permissions_and_failed_resume_preserves_room() {
+    let (mut server, store) = fixture();
+    let (a, _ar) = connect(&mut server, 1);
+    let (b, _) = connect(&mut server, 2);
+    let (outsider, _) = connect(&mut server, 3);
+    server.join_room(a, 10).await.unwrap();
+    server.send_message(a, "secret".into()).await.unwrap();
+    server.join_room(outsider, 20).await.unwrap();
+    assert_eq!(
+        server.history(outsider, 10, 0, 50, true).await.unwrap_err(),
+        AccessError::Denied
+    );
+    assert!(server.rooms[&20].contains(&outsider));
+    assert_eq!(
+        server.history(a, 10, 999, 50, true).await.unwrap_err(),
+        AccessError::InvalidCursor
+    );
+    assert!(server.rooms[&10].contains(&a));
+    server.history(b, 10, 0, 50, false).await.unwrap();
+    assert!(!server.rooms[&10].contains(&b));
+    server
+        .change_member(a, 10, Uuid::from_u128(2), false)
+        .await
+        .unwrap();
+    assert_eq!(
+        server.history(b, 10, 0, 50, true).await.unwrap_err(),
+        AccessError::Denied
+    );
+    store
+        .unavailable
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        server.history(a, 10, 0, 50, true).await.unwrap_err(),
+        AccessError::Unavailable
+    );
+    assert!(server.rooms[&10].contains(&a));
 }

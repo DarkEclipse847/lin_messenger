@@ -111,13 +111,15 @@ unless dependencies were available and the flows were actually exercised.
   copied into its image. It is not a usable bundled chat UI or health check.
 - Live rooms are in memory. `/create` persists a chat and creator membership;
   `/join`, `/list`, and message delivery enforce persisted membership. Messages
-  are saved before broadcast. History and reconnect recovery are not implemented.
+  are saved before broadcast. `/history` paginates saved messages; `/resume` replays
+  from a persisted sequence cursor, then subscribes to JSON live delivery. Recovery
+  is single-instance; cross-server live delivery and send retry deduplication are not implemented.
 - Registration publishing remains best effort despite persistent messages and
   publisher confirms. The Rust consumer acknowledges successful persistence,
   accepts matching duplicate registrations, and rejects invalid events without
   requeueing. Persistence failures stop the consumer with the delivery unacknowledged;
   there is no automatic reconnect/retry loop. Do not assume reliable profile
   synchronization or atomic registration across services.
-- Refresh/logout endpoints, message history, end-to-end encryption, S3 attachment
+- Refresh/logout endpoints, end-to-end encryption, S3 attachment
   integration, and a functional messenger client are not implemented. Keep such
   roadmap items distinct from current capabilities.

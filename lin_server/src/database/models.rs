@@ -34,9 +34,10 @@ pub struct Chat {
     pub created_at: chrono::NaiveDateTime,
 }
 
-#[derive(Queryable, Selectable, Insertable, Debug)]
+#[derive(Queryable, Selectable, Debug, Clone, PartialEq)]
 #[diesel(table_name = crate::database::schema::messages)]
 pub struct Message {
+    pub sequence: i64,
     pub id: i64,
     pub chat_id: Option<i64>,
     pub sender_id: Option<Uuid>,

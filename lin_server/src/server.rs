@@ -1,7 +1,10 @@
 // The single command processor owns live sessions and serializes permission changes.
 use crate::{
     ConnId, Msg, RoomId,
-    database::membership::{AccessError, MembershipStore, PostgresMembership},
+    database::membership::{
+        AccessError, HistoryPage, MAX_HISTORY_LIMIT, MembershipStore, PostgresMembership,
+    },
+    handler::message_json,
 };
 use rand::RngExt;
 use std::{
@@ -33,6 +36,14 @@ enum Command {
         room: RoomId,
         reply: Reply<()>,
     },
+    History {
+        conn: ConnId,
+        room: RoomId,
+        after: i64,
+        limit: usize,
+        resume: bool,
+        reply: Reply<HistoryPage>,
+    },
     Change {
         conn: ConnId,
         room: RoomId,
@@ -50,6 +61,7 @@ enum Command {
 #[derive(Debug)]
 struct Session {
     user: Uuid,
+    structured: bool,
     tx: mpsc::Sender<Msg>,
 }
 
@@ -103,7 +115,14 @@ impl ChatServer {
                 break id;
             }
         };
-        self.sessions.insert(id, Session { user, tx });
+        self.sessions.insert(
+            id,
+            Session {
+                user,
+                tx,
+                structured: false,
+            },
+        );
         // No implicit public lobby: a new connection has no chat access yet.
         id
     }
@@ -135,7 +154,36 @@ impl ChatServer {
         // A failed authorization leaves the previous room unchanged.
         self.leave(conn);
         self.rooms.entry(room).or_default().insert(conn);
+        self.sessions.get_mut(&conn).unwrap().structured = false;
         Ok(())
+    }
+
+    async fn history(
+        &mut self,
+        conn: ConnId,
+        room: RoomId,
+        after: i64,
+        limit: usize,
+        resume: bool,
+    ) -> Result<HistoryPage, AccessError> {
+        let user = self.user(conn)?;
+        if after < 0 || !(1..=MAX_HISTORY_LIMIT).contains(&limit) {
+            return Err(AccessError::InvalidCursor);
+        }
+        let page = self
+            .query(move |store| store.history(room, user, after, limit))
+            .await?;
+        if resume {
+            // No Message command can interleave between the final query and joining.
+            // Intermediate pages leave the connection unsubscribed so live frames cannot
+            // advance a client's cursor past messages still waiting to be replayed.
+            self.leave(conn);
+            self.sessions.get_mut(&conn).unwrap().structured = true;
+            if !page.has_more {
+                self.rooms.entry(room).or_default().insert(conn);
+            }
+        }
+        Ok(page)
     }
 
     async fn change_member(
@@ -179,7 +227,7 @@ impl ChatServer {
         let recipients: Vec<_> = participants
             .iter()
             .copied()
-            .filter(|id| *id != conn)
+            .filter(|id| *id != conn || self.sessions.get(id).is_some_and(|s| s.structured))
             .collect();
         self.rooms
             .retain(|_, participants| !participants.is_empty());
@@ -187,11 +235,18 @@ impl ChatServer {
             return Err(AccessError::Denied);
         }
         let body = msg.clone();
-        self.query(move |store| store.save_message(room, user, body))
+        let saved = self
+            .query(move |store| store.save_message(room, user, body))
             .await?;
+        let structured = message_json(&saved).to_string();
         for id in recipients {
             if let Some(session) = self.sessions.get(&id) {
-                if session.tx.try_send(msg.clone()).is_err() {
+                let frame = if session.structured {
+                    structured.clone()
+                } else {
+                    msg.clone()
+                };
+                if session.tx.try_send(frame).is_err() {
                     self.disconnect(id);
                 }
             }
@@ -214,6 +269,19 @@ impl ChatServer {
                 }
                 Command::Join { conn, room, reply } => {
                     let _ = reply.send(self.join_room(conn, room).await);
+                }
+                Command::History {
+                    conn,
+                    room,
+                    after,
+                    limit,
+                    resume,
+                    reply,
+                } => {
+                    let result = self.history(conn, room, after, limit, resume).await;
+                    if reply.send(result).is_err() && resume {
+                        self.disconnect(conn);
+                    }
                 }
                 Command::Change {
                     conn,
@@ -264,6 +332,24 @@ impl ChatServerHandle {
     pub async fn join_room(&self, conn: ConnId, room: RoomId) -> Result<(), AccessError> {
         self.request(|reply| Command::Join { conn, room, reply })
             .await
+    }
+    pub async fn history(
+        &self,
+        conn: ConnId,
+        room: RoomId,
+        after: i64,
+        limit: usize,
+        resume: bool,
+    ) -> Result<HistoryPage, AccessError> {
+        self.request(|reply| Command::History {
+            conn,
+            room,
+            after,
+            limit,
+            resume,
+            reply,
+        })
+        .await
     }
     pub async fn change_member(
         &self,

@@ -25,6 +25,13 @@
 - [ ] Add refresh/logout and revoke active connections
 - [ ] Set up HTTPS and browser Origin checks
 - [ ] Add registration retries and RabbitMQ reconnect
+- [ ] Add transactional outboxes for registration and chat events
+- [ ] Broadcast chat events across servers through RabbitMQ(one queue per instance)
+- [ ] Add message acknowledgments, retry deduplication and per-chat ordering
+- [ ] Enforce membership changes and connection eviction across servers
+- [ ] Add database connection pooling and split command processing by chat
+- [ ] Add load balancing, graceful shutdown and reconnect backoff
+- [ ] Add scaling metrics and test two-server chat/restart recovery
 - [ ] Add rate limits and bound queues/database work
 - [ ] Add health checks and backup/restore checks
 - [ ] Add secret-free deployment templates and track migrations

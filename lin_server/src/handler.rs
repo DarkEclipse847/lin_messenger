@@ -42,7 +42,6 @@ pub async fn chat_ws(
         tokio::select! {
             incoming = msg_stream.next() => {
                 let Some(Ok(msg)) = incoming else { break None; };
-
                 match msg {
                     AggregatedMessage::Ping(bytes) => {
                         last_heartbeat = Instant::now();
@@ -144,6 +143,31 @@ async fn process_text_msg(
                     session.text("!!! room name is required").await?;
                 }
             },
+
+            "/history" | "/resume" => {
+                let resume = msg.split_whitespace().next() == Some("/resume");
+                match cmd_args.next().and_then(parse_history_args) {
+                    Some((room, after, limit)) => {
+                        match chat_server.history(conn, room, after, limit, resume).await {
+                            Ok(page) => {
+                                session.text(serde_json::json!({
+                                    "type": if resume { "resume" } else { "history" },
+                                    "chat_id": room.to_string(),
+                                    "messages": page.messages.iter().map(message_json).collect::<Vec<_>>(),
+                                    "next_cursor": page.next_cursor.to_string(),
+                                    "has_more": page.has_more,
+                                }).to_string()).await?;
+                            }
+                            Err(err) => session.text(err.to_string()).await?,
+                        }
+                    }
+                    None => {
+                        session
+                            .text("!!! expected <chat ID> <after cursor> [limit 1..100]")
+                            .await?
+                    }
+                }
+            }
 
             "/create" => match cmd_args.next() {
                 Some(title) => {
@@ -257,6 +281,31 @@ fn parse_room_id(value: &str) -> Option<u64> {
         .parse::<u64>()
         .ok()
         .filter(|id| *id > 0 && *id <= i64::MAX as u64)
+}
+
+fn parse_history_args(value: &str) -> Option<(u64, i64, usize)> {
+    let mut args = value.split_whitespace();
+    let room = parse_room_id(args.next()?)?;
+    let after = args.next()?.parse::<i64>().ok().filter(|n| *n >= 0)?;
+    let limit = match args.next() {
+        Some(value) => value.parse::<usize>().ok()?,
+        None => 50,
+    };
+    if args.next().is_some() || !(1..=database::membership::MAX_HISTORY_LIMIT).contains(&limit) {
+        return None;
+    }
+    Some((room, after, limit))
+}
+
+/// BIGINTs are strings on the wire to preserve precision in JavaScript clients.
+pub(crate) fn message_json(message: &database::models::Message) -> serde_json::Value {
+    serde_json::json!({
+        "type": "message", "id": message.id.to_string(),
+        "chat_id": message.chat_id.map(|id| id.to_string()),
+        "cursor": message.sequence.to_string(), "sender_id": message.sender_id,
+        "body": message.body, "sent_at": message.sent_at.map(|t| t.and_utc()),
+        "attachment": message.attachment,
+    })
 }
 
 #[cfg(test)]

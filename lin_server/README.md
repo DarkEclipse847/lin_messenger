@@ -26,18 +26,20 @@ Authentication is checked at the handshake, not again for each message.
 
 ## WebSocket protocol
 
-Send plain text frames; this is not a JSON message protocol. Leading and trailing
-whitespace is trimmed.
+Send plain text commands and message bodies. Leading and trailing whitespace is
+trimmed. History/recovery responses and live messages after `/resume` are JSON.
 
 | Input | Behavior |
 | --- | --- |
 | `/list` | Sends each persisted chat ID the authenticated user belongs to, including offline chats, in a separate text frame |
 | `/join <positive i64>` | Joins an existing chat only if the authenticated user is a member; a denied join preserves the current room |
+| `/history <chat ID> <after cursor> [limit]` | Reads a page of saved messages without joining; cursor `0` starts at the oldest message |
+| `/resume <chat ID> <after cursor> [limit]` | Replays a page and joins live delivery when `has_more` is false |
 | `/create <title>` | Inserts a PostgreSQL chat with the authenticated user as admin, joins it, and replies `created chat <id> "<title>"` |
 | `/add <chat ID> <user UUID>` | Admin only: adds a replicated user to the chat (idempotent) |
 | `/remove <chat ID> <user UUID>` | Admin only: removes a member and evicts all their active connections from that chat (idempotent); the admin cannot remove themself |
 | `/name <name>` | Sets a connection-local display prefix; does not change the user profile |
-| Other text | Saves to PostgreSQL, then broadcasts to other connections in the current room; the sender receives no echo |
+| Other text | Saves to PostgreSQL, then broadcasts to other connections in the current room; the sender receives no echo with `/join`, or a saved JSON message with `/resume` |
 
 New connections start without a room. Create a chat or join one you belong to
 before sending messages. Chat creation inserts both the chat and its creator's
@@ -67,6 +69,56 @@ The server pings every five seconds and disconnects after more than ten seconds
 without a client ping/pong. Frame size is limited to 128 KiB and aggregated
 continuations to 2 MiB. Binary messages are logged and ignored.
 
+## History and reconnect recovery
+
+Both commands require current persisted membership on every page. Members can read
+all saved messages in a chat, including those predating their membership. The default
+limit is 50, with a range of 1–100. Pages are ordered oldest first by a persisted
+sequence, independent of random message IDs or timestamps. Responses have this shape:
+
+```json
+{"type":"resume","chat_id":"42","messages":[{"type":"message","id":"123","chat_id":"42","cursor":"7","sender_id":"550e8400-e29b-41d4-a716-446655440000","body":"hello","sent_at":"2026-10-29T00:00:00Z","attachment":null}],"next_cursor":"7","has_more":false}
+```
+
+IDs and cursors are decimal **strings**, preserving i64 precision in JavaScript.
+Timestamps are UTC; legacy nullable fields remain null. A history response has
+`type: "history"` with the same other fields. Errors remain plain text. Cursor `0`
+means the beginning; any nonzero cursor must identify a saved message in that chat.
+An unknown, foreign-chat, or future cursor is rejected. Sequence gaps are normal.
+
+Client reconnect procedure:
+
+1. Retain a cursor per chat only after successfully processing its messages.
+2. Reconnect through the authenticated gateway and send `/resume <chat> <cursor>`.
+   Use `0` for the first sync or to rebuild local history.
+3. Process the page in order and save `next_cursor`. While `has_more` is true,
+   repeat `/resume` with that cursor. Intermediate pages leave this connection
+   outside all live rooms; sending messages then returns `Please join a chat first`.
+4. When `has_more` is false, recovery is complete and the connection is already
+   subscribed. Subsequent frames are individual JSON message objects, including
+   the sender's own committed messages. Save each processed message's `cursor`.
+
+An empty page preserves the supplied cursor. `/history` does not change the current
+room or delivery format. `/join` (and `/create`) selects legacy plain-text delivery.
+Use a fresh connection for reconnect recovery; previously queued frames on an existing
+connection can still arrive. Deduplicate replayed messages by ID and never regress a
+stored cursor. A lost send response does not make resending safe: there is no client
+idempotency key yet, so retries can create duplicate messages.
+
+The single command processor serializes the final replay query and live subscription,
+so local sends cannot fall between them. Replies precede queued live frames. Slow
+clients are disconnected when their live queue fills and must resume from their last
+processed cursor. Database work stays on blocking workers. Pages contain at most 100
+messages and target 2 MiB of serialized message data; one oversized message is returned
+alone to ensure progress. Concurrent traffic may require additional recovery pages.
+
+This guarantee applies to one server instance: cross-instance broadcasts are not
+implemented, and direct database writers do not produce live events. Normal writes
+lock the chat before assigning the sequence, preserving commit order within a chat.
+Deploy the migration with old writers stopped. Existing messages are backfilled by
+`sent_at` (nulls first), then ID. Rolling back/reapplying the sequence migration
+invalidates client cursors; clients must clear them and sync from zero.
+
 ## Persistence and registration events
 
 The server uses its own PostgreSQL database with `users`, `chats`, `messages`,
@@ -80,9 +132,8 @@ redeliveries idempotently, but does not reconnect after failures. Synchronizatio
 authenticated sender UUID, UTC timestamp, and the broadcast text (including any
 connection-local `/name` prefix); attachment is NULL. Authorization and insertion
 share a transaction that locks the chat against concurrent membership changes.
-Message history, reconnect recovery, and attachments
-are not implemented. A committed message can survive a failed live delivery;
-there are no delivery acknowledgments or retry deduplication yet.
+Attachments are not implemented. A committed message survives failed live delivery
+and can be replayed with `/resume`; client send retries are not deduplicated.
 
 ## Run locally
 

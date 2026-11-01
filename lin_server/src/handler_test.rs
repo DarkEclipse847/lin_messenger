@@ -31,3 +31,26 @@ fn room_ids_reject_malformed_and_out_of_database_range_values() {
     assert_eq!(parse_room_id(" 42 "), Some(42));
     assert_eq!(parse_room_id("9223372036854775807"), Some(i64::MAX as u64));
 }
+
+#[test]
+fn history_commands_validate_cursor_and_bounded_page_size() {
+    use super::parse_history_args;
+    assert_eq!(parse_history_args("42 0"), Some((42, 0, 50)));
+    assert_eq!(
+        parse_history_args("42 9223372036854775807 100"),
+        Some((42, i64::MAX, 100))
+    );
+    for args in [
+        "",
+        "42",
+        "0 0",
+        "42 -1",
+        "42 abc",
+        "42 9223372036854775808",
+        "42 0 0",
+        "42 0 101",
+        "42 0 1 extra",
+    ] {
+        assert_eq!(parse_history_args(args), None, "{args}");
+    }
+}

@@ -83,3 +83,80 @@ fn migration_and_persisted_permissions() {
         Err(diesel::result::Error::RollbackTransaction)
     ));
 }
+
+#[test]
+#[ignore = "requires LIN_TEST_DATABASE_URL pointing to disposable PostgreSQL"]
+fn history_pages_validate_access_cursors_order_and_size() {
+    use diesel_migrations::MigrationHarness;
+    let mut conn =
+        PgConnection::establish(&std::env::var("LIN_TEST_DATABASE_URL").unwrap()).unwrap();
+    let result = conn.transaction::<(), diesel::result::Error, _>(|conn| {
+        conn.batch_execute(&format!(
+            "CREATE SCHEMA history_test_{}; SET LOCAL search_path TO history_test_{}",
+            std::process::id(),
+            std::process::id()
+        ))?;
+        conn.run_pending_migrations(db::MIGRATIONS).unwrap();
+        let alice = Uuid::from_u128(1);
+        let bob = Uuid::from_u128(2);
+        db::new_user(conn, alice, "alice".into(), "alice@example.test".into())?;
+        db::new_user(conn, bob, "bob".into(), "bob@example.test".into())?;
+        db::create_chat(conn, 10, "chat".into(), alice)?;
+        db::create_chat(conn, 20, "other".into(), alice)?;
+        // Random IDs and equal timestamps must not affect cursor pagination.
+        let one = db::create_message(conn, 999, 10, alice, "one".into(), None)?;
+        let other = db::create_message(conn, 500, 20, alice, "other".into(), None)?;
+        let two = db::create_message(conn, 1, 10, alice, "two".into(), None)?;
+        diesel::update(messages::table)
+            .set(messages::sent_at.eq(one.sent_at))
+            .execute(conn)?;
+        let page = history(conn, 10, alice, 0, 1).unwrap();
+        assert_eq!(page.messages[0].id, one.id);
+        assert!(page.has_more);
+        let page = history(conn, 10, alice, page.next_cursor, 1).unwrap();
+        assert_eq!(page.messages[0].id, two.id);
+        assert!(!page.has_more);
+        assert!(
+            history(conn, 10, alice, page.next_cursor, 1)
+                .unwrap()
+                .messages
+                .is_empty()
+        );
+        for cursor in [other.sequence, i64::MAX, -1] {
+            assert_eq!(
+                history(conn, 10, alice, cursor, 50).unwrap_err(),
+                AccessError::InvalidCursor
+            );
+        }
+        assert_eq!(
+            history(conn, 10, bob, 0, 50).unwrap_err(),
+            AccessError::Denied
+        );
+        assert_eq!(
+            history(conn, 999, alice, 0, 50).unwrap_err(),
+            AccessError::Denied
+        );
+        change_member(conn, 10, alice, bob, true).unwrap();
+        assert_eq!(history(conn, 10, bob, 0, 50).unwrap().messages.len(), 2);
+        change_member(conn, 10, alice, bob, false).unwrap();
+        assert_eq!(
+            history(conn, 10, bob, 0, 50).unwrap_err(),
+            AccessError::Denied
+        );
+        for _ in 0..3 {
+            save_message(conn, 10, alice, "x".repeat(HISTORY_BYTES / 2)).unwrap();
+        }
+        let page = history(conn, 10, alice, two.sequence, 100).unwrap();
+        assert_eq!(page.messages.len(), 1);
+        assert!(page.has_more);
+        assert_eq!(
+            history(conn, 10, alice, 0, 101).unwrap_err(),
+            AccessError::InvalidCursor
+        );
+        Err(diesel::result::Error::RollbackTransaction)
+    });
+    assert!(matches!(
+        result,
+        Err(diesel::result::Error::RollbackTransaction)
+    ));
+}

@@ -34,9 +34,13 @@ pub struct Chat {
     pub created_at: chrono::NaiveDateTime,
 }
 
-#[derive(Queryable, Selectable, Insertable, Debug)]
+#[derive(Queryable, Selectable, Debug, Clone, PartialEq)]
 #[diesel(table_name = crate::database::schema::messages)]
 pub struct Message {
+    // Recovery cursor: timestamps can tie or move backward, and message IDs are random.
+    // Writers lock the chat before assigning this database sequence, preserving commit
+    // order within that chat. The counter is shared across chats, so gaps are normal.
+    pub sequence: i64,
     pub id: i64,
     pub chat_id: Option<i64>,
     pub sender_id: Option<Uuid>,

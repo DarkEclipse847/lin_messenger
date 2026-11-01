@@ -4,8 +4,8 @@ use uuid::Uuid;
 
 use super::{
     db,
-    models::ChatMember,
-    schema::{chat_members, chats},
+    models::{ChatMember, Message},
+    schema::{chat_members, chats, messages},
 };
 use crate::RoomId;
 
@@ -15,11 +15,13 @@ pub enum AccessError {
     Unavailable,
     NoRoom,
     SaveFailed,
+    InvalidCursor,
 }
 
 impl std::fmt::Display for AccessError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
+            Self::InvalidCursor => "Invalid history cursor or limit",
             Self::Denied => "Access to chat denied",
             Self::Unavailable => "Chat permissions unavailable",
             Self::SaveFailed => "Message could not be saved",
@@ -29,7 +31,19 @@ impl std::fmt::Display for AccessError {
 }
 
 pub trait MembershipStore: Send + Sync + std::fmt::Debug {
-    fn save_message(&self, room: RoomId, sender: Uuid, body: String) -> Result<(), AccessError>;
+    fn save_message(
+        &self,
+        room: RoomId,
+        sender: Uuid,
+        body: String,
+    ) -> Result<Message, AccessError>;
+    fn history(
+        &self,
+        room: RoomId,
+        user: Uuid,
+        after: i64,
+        limit: usize,
+    ) -> Result<HistoryPage, AccessError>;
     fn rooms(&self, user: Uuid) -> Result<Vec<RoomId>, AccessError>;
     fn members(&self, room: RoomId) -> Result<Vec<Uuid>, AccessError>;
     fn change(&self, room: RoomId, actor: Uuid, target: Uuid, add: bool)
@@ -40,12 +54,33 @@ pub trait MembershipStore: Send + Sync + std::fmt::Debug {
 pub struct PostgresMembership;
 
 impl MembershipStore for PostgresMembership {
-    fn save_message(&self, room: RoomId, sender: Uuid, body: String) -> Result<(), AccessError> {
+    fn save_message(
+        &self,
+        room: RoomId,
+        sender: Uuid,
+        body: String,
+    ) -> Result<Message, AccessError> {
         save_message(
             &mut db::open_connection().map_err(|_| AccessError::SaveFailed)?,
             room,
             sender,
             body,
+        )
+    }
+
+    fn history(
+        &self,
+        room: RoomId,
+        user: Uuid,
+        after: i64,
+        limit: usize,
+    ) -> Result<HistoryPage, AccessError> {
+        history(
+            &mut db::open_connection().map_err(|_| AccessError::Unavailable)?,
+            room,
+            user,
+            after,
+            limit,
         )
     }
 
@@ -95,7 +130,7 @@ pub fn save_message(
     room: RoomId,
     sender: Uuid,
     body: String,
-) -> Result<(), AccessError> {
+) -> Result<Message, AccessError> {
     let room = i64::try_from(room).map_err(|_| AccessError::Denied)?;
     conn.transaction::<_, diesel::result::Error, _>(|conn| {
         let chat = chats::table
@@ -112,8 +147,8 @@ pub fn save_message(
         {
             return Ok(Err(AccessError::Denied));
         }
-        db::create_message(conn, db::generate_id(), room, sender, body, None)?;
-        Ok(Ok(()))
+        let message = db::create_message(conn, db::generate_id(), room, sender, body, None)?;
+        Ok(Ok(message))
     })
     .map_err(|_| AccessError::SaveFailed)?
 }
@@ -168,3 +203,87 @@ pub fn change_member(
 #[cfg(test)]
 #[path = "membership_test.rs"]
 mod tests;
+
+/// Keep each response bounded by both row count and serialized message payload size.
+pub const MAX_HISTORY_LIMIT: usize = 100;
+const HISTORY_BYTES: usize = 2 * 1024 * 1024;
+
+#[derive(Debug)]
+pub struct HistoryPage {
+    pub messages: Vec<Message>,
+    pub next_cursor: i64,
+    pub has_more: bool,
+}
+
+pub fn history(
+    conn: &mut PgConnection,
+    room: RoomId,
+    user: Uuid,
+    after: i64,
+    limit: usize,
+) -> Result<HistoryPage, AccessError> {
+    if after < 0 || !(1..=MAX_HISTORY_LIMIT).contains(&limit) {
+        return Err(AccessError::InvalidCursor);
+    }
+    let room = i64::try_from(room).map_err(|_| AccessError::Denied)?;
+    conn.transaction::<_, diesel::result::Error, _>(|conn| {
+        // Same lock as writers: the page and membership check share a stable boundary.
+        let chat = chats::table
+            .find(room)
+            .select(chats::id)
+            .for_update()
+            .first::<i64>(conn)
+            .optional()?;
+        if chat.is_none()
+            || !diesel::select(diesel::dsl::exists(chat_members::table.find((room, user))))
+                .get_result::<bool>(conn)?
+        {
+            return Ok(Err(AccessError::Denied));
+        }
+        // Cursors must belong to this chat; a future cursor must not silently skip messages.
+        if after != 0
+            && !diesel::select(diesel::dsl::exists(
+                messages::table
+                    .filter(messages::chat_id.eq(room))
+                    .filter(messages::sequence.eq(after)),
+            ))
+            .get_result::<bool>(conn)?
+        {
+            return Ok(Err(AccessError::InvalidCursor));
+        }
+        let mut rows = messages::table
+            .filter(messages::chat_id.eq(room))
+            .filter(messages::sequence.gt(after))
+            .order(messages::sequence)
+            .limit((limit + 1) as i64)
+            .select(Message::as_select())
+            .load::<Message>(conn)?;
+        let mut bytes = 0;
+        let mut count = 0;
+        for row in rows.iter().take(limit) {
+            // Reserve envelope space and count escaped strings, without coupling
+            // persistence to the WebSocket response format.
+            let size = 512
+                + serde_json::to_string(&row.body)
+                    .expect("string serialization")
+                    .len()
+                + serde_json::to_string(&row.attachment)
+                    .expect("string serialization")
+                    .len();
+            if count > 0 && bytes + size > HISTORY_BYTES {
+                break;
+            }
+            bytes += size;
+            count += 1;
+        }
+        let has_more = rows.len() > count;
+        rows.truncate(count);
+        let next_cursor = rows.last().map_or(after, |m| m.sequence);
+        Ok(Ok(HistoryPage {
+            messages: rows,
+            next_cursor,
+            has_more,
+        }))
+    })
+    .map_err(|_| AccessError::Unavailable)?
+}

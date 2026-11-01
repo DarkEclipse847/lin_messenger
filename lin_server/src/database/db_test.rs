@@ -13,7 +13,7 @@ fn consolidated_migrations_initialize_a_fresh_database_once() {
             std::process::id()
         ))?;
         let applied = conn.run_pending_migrations(MIGRATIONS).unwrap();
-        assert_eq!(applied.len(), 6);
+        assert_eq!(applied.len(), 7);
         assert!(conn.run_pending_migrations(MIGRATIONS).unwrap().is_empty());
         let id = Uuid::from_u128(42);
         new_user(conn, id, "fresh".into(), "fresh@example.test".into())?;
@@ -61,6 +61,33 @@ fn migrate_existing_users_and_references() {
         create_chat(conn, 3, "new".into(), new_id)?;
         create_message(conn, 2, 3, new_id, "new message".into(), None)?;
         assert!(create_chat(conn, 4, "invalid admin".into(), Uuid::nil()).is_err());
+        Err(Error::RollbackTransaction)
+    });
+    assert!(matches!(result, Err(Error::RollbackTransaction)));
+}
+
+#[test]
+#[ignore = "requires LIN_TEST_DATABASE_URL pointing to disposable PostgreSQL"]
+fn message_sequence_migration_backfills_and_reverts_without_losing_messages() {
+    use crate::database::schema::messages;
+    let mut conn =
+        PgConnection::establish(&std::env::var("LIN_TEST_DATABASE_URL").unwrap()).unwrap();
+    let result = conn.transaction::<(), Error, _>(|conn| {
+        conn.batch_execute(&format!("CREATE SCHEMA sequence_test_{}; SET LOCAL search_path TO sequence_test_{}", std::process::id(), std::process::id()))?;
+        conn.run_pending_migrations(MIGRATIONS).unwrap();
+        conn.revert_last_migration(MIGRATIONS).unwrap();
+        conn.batch_execute("INSERT INTO messages(id,body,sent_at) VALUES (900,'null time',NULL), (500,'later','2026-01-02'), (100,'same time first','2026-01-01'), (200,'same time second','2026-01-01')")?;
+        for _ in 0..2 {
+            conn.run_pending_migrations(MIGRATIONS).unwrap();
+            let rows = messages::table.order(messages::sequence).select((messages::id, messages::sequence)).load::<(i64,i64)>(conn)?;
+            assert_eq!(rows, [(900,1), (100,2), (200,3), (500,4)]);
+            // Default starts strictly beyond the backfill, including after rollback/reapply.
+            conn.batch_execute("INSERT INTO messages(id,body) VALUES (999,'new')")?;
+            assert_eq!(messages::table.find(999_i64).select(messages::sequence).first::<i64>(conn)?, 5);
+            diesel::delete(messages::table.find(999_i64)).execute(conn)?;
+            conn.revert_last_migration(MIGRATIONS).unwrap();
+            assert_eq!(messages::table.count().get_result::<i64>(conn)?, 4);
+        }
         Err(Error::RollbackTransaction)
     });
     assert!(matches!(result, Err(Error::RollbackTransaction)));

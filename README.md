@@ -21,8 +21,9 @@
 - [x] Use UUIDs for user identities across auth and messaging
 - [x] Add chat membership and permissions(no arbitrary room joins)
 - [x] Make migrations folder avaliable for github 
-- [ ] Save messages, add history and reconnect recovery
-- [ ] Add refresh/logout and revoke active connections
+- [x] Save messages, add history and reconnect recovery
+- [x] Add refresh/logout endpoints
+- [ ] Revoke active connections on logout
 - [ ] Set up HTTPS and browser Origin checks
 - [ ] Add registration retries and RabbitMQ reconnect
 - [ ] Add transactional outboxes for registration and chat events

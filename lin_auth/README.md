@@ -23,12 +23,27 @@ Responses use Cache-Control: no-store.
 | --- | --- | --- |
 | POST | `/api/register` | Body fields `username`, `email`, `password`; creates a user and session |
 | POST | `/api/login` | `password` plus exactly one of `email` or `username`; creates a replacement session |
+| POST | `/api/refresh` | Current `refresh_token` cookie; rotates both tokens and returns 204 |
+| POST | `/api/logout` | Current `refresh_token` cookie; revokes both tokens, clears cookies, and returns 204 |
 | Any | `/api/auth/validate` | Bearer token or `access_token` cookie; returns 200 with `X-User-Id`, 401 for an invalid session, or 503 for a session-store outage |
 
 Validation prefers `Authorization: Bearer <token>` over the cookie; malformed
 explicit authorization headers are rejected. It verifies the JWT and requires an exact match with Redis. Nginx uses
 this endpoint for WebSocket handshake authorization and forwards `X-User-Id` to
 the chat service. PostgreSQL is not queried during validation.
+
+Refresh and logout require a valid, unexpired refresh cookie matching the stored
+hash; they work after the access token expires. Missing, expired, replaced, or
+reused refresh tokens return 401. Storage failures return 503 without changing
+cookies. Refresh replaces both cookies with the same security flags as login.
+Logout removes the refresh record and Redis access token. All session changes
+serialize on the user row, so an old refresh/logout cannot overwrite a newer login.
+Only one session per user is supported. Clients must serialize refresh requests.
+
+PostgreSQL and Redis updates are not atomic: a Redis timeout or database commit
+failure can leave stores inconsistent and require another login. Existing
+WebSocket connections remain open; revocation prevents subsequent authenticated
+handshakes but does not disconnect already authorized connections.
 
 ## Run locally
 
@@ -94,8 +109,9 @@ go build ./...
 
 Targeted unit and HTTP handler tests are included. Integration checks require the
 three backing services; verify registration, login, cookie/header validation,
-and rejection of missing, expired, or replaced tokens. Refresh-token issuance
-exists, but refresh and logout endpoints are not implemented.
+and rejection of missing, expired, or replaced tokens. Refresh/logout handler tests
+cover rotation, cookie clearing, and failures. Set `LIN_TEST_DATABASE_URL` to a
+disposable PostgreSQL database to exercise session persistence and rollback tests.
 
 ## Hardening changes and compatibility
 

@@ -58,6 +58,14 @@ func GenerateToken(id uuid.UUID, expires int64) (string, error) {
 
 // ValidateToken accepts access tokens only. Refresh tokens have a separate purpose.
 func ValidateToken(token string) (*jwt.Token, error) {
+	return validateTokenPurpose(token, "access")
+}
+
+func ValidateRefreshToken(token string) (*jwt.Token, error) {
+	return validateTokenPurpose(token, "refresh")
+}
+
+func validateTokenPurpose(token, purpose string) (*jwt.Token, error) {
 	key, err := SigningKey()
 	if err != nil {
 		return nil, err
@@ -69,8 +77,8 @@ func ValidateToken(token string) (*jwt.Token, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !result.Valid || claims.UserID == uuid.Nil || claims.TokenType != "access" || claims.ID == "" {
-		return nil, errors.New("invalid access token claims")
+	if !result.Valid || claims.UserID == uuid.Nil || claims.TokenType != purpose || claims.ID == "" {
+		return nil, errors.New("invalid token claims")
 	}
 	return result, nil
 }

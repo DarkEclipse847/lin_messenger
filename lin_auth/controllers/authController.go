@@ -156,14 +156,13 @@ func issueSession(c fiber.Ctx, db *gorm.DB, user models.User) error {
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
-	if err := database.CreateAuth(db, user.Id, refresh); err != nil {
-		log.Error().Msg("Failed to store refresh session")
+	if err := database.ChangeSession(db, user.Id, "", refresh, func() error {
+		return r.StoreAccessToken(user.Id, access, utils.AccessTokenTTL)
+	}); err != nil {
+		log.Error().Msg("Failed to store session")
 		return fiber.ErrServiceUnavailable
 	}
-	if err := r.StoreAccessToken(user.Id, access, utils.AccessTokenTTL); err != nil {
-		log.Error().Msg("Failed to store access session")
-		return fiber.ErrServiceUnavailable
-	}
+
 	setSessionCookies(c, access, refresh)
 	// A POST must not produce a permanently cached redirect. Escape legacy usernames.
 	return c.Redirect().Status(fiber.StatusSeeOther).To("/" + url.PathEscape(user.Username))
@@ -183,4 +182,51 @@ func setSessionCookies(c fiber.Ctx, access, refresh string) {
 			HTTPOnly: true, Secure: true, SameSite: "Lax", Path: "/",
 		})
 	}
+}
+
+func Refresh(c fiber.Ctx, db *gorm.DB) error {
+	return changeRefreshSession(c, false, func(id uuid.UUID, current, access, refresh string) error {
+		return database.ChangeSession(db, id, current, refresh, func() error {
+			return r.StoreAccessToken(id, access, utils.AccessTokenTTL)
+		})
+	})
+}
+
+func Logout(c fiber.Ctx, db *gorm.DB) error {
+	return changeRefreshSession(c, true, func(id uuid.UUID, current, access, refresh string) error {
+		return database.ChangeSession(db, id, current, "", func() error { return r.DeleteAccessToken(id) })
+	})
+}
+
+func changeRefreshSession(c fiber.Ctx, logout bool, change func(uuid.UUID, string, string, string) error) error {
+	c.Set("Cache-Control", "no-store")
+	current := strings.TrimSpace(c.Cookies("refresh_token"))
+	parsed, err := utils.ValidateRefreshToken(current)
+	if err != nil {
+		return fiber.ErrUnauthorized
+	}
+	id := parsed.Claims.(*utils.TokenClaims).UserID
+	var access, refresh string
+	if !logout {
+		access, refresh, err = utils.GenerateTokenPair(id)
+		if err != nil {
+			return fiber.ErrInternalServerError
+		}
+	}
+	if err := change(id, current, access, refresh); err != nil {
+		if errors.Is(err, database.ErrInvalidSession) {
+			return fiber.ErrUnauthorized
+		}
+		log.Error().Msg("Failed to change session")
+		return fiber.ErrServiceUnavailable
+	}
+	if logout {
+		for _, name := range []string{"access_token", "refresh_token"} {
+			c.Cookie(&fiber.Cookie{Name: name, Value: "", Expires: time.Unix(1, 0), MaxAge: -1,
+				HTTPOnly: true, Secure: true, SameSite: "Lax", Path: "/"})
+		}
+	} else {
+		setSessionCookies(c, access, refresh)
+	}
+	return c.SendStatus(fiber.StatusNoContent)
 }

@@ -15,6 +15,9 @@ func Setup(app *fiber.App, db *gorm.DB) {
 		return controllers.Login(c, db)
 	})
 
+	app.Post("/api/refresh", func(c fiber.Ctx) error { return controllers.Refresh(c, db) })
+	app.Post("/api/logout", func(c fiber.Ctx) error { return controllers.Logout(c, db) })
+
 	app.All("/api/auth/validate", func(c fiber.Ctx) error {
 		return controllers.Validate(c, db)
 	})

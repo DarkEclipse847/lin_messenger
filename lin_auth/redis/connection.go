@@ -58,3 +58,13 @@ func GetAccessToken(userID uuid.UUID) (string, error) {
 	defer cancel()
 	return client.Get(ctx, fmt.Sprintf("access_token:%s", userID)).Result()
 }
+
+func DeleteAccessToken(userID uuid.UUID) error {
+	client, err := sharedClient()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), operationTimeout)
+	defer cancel()
+	return client.Del(ctx, fmt.Sprintf("access_token:%s", userID)).Err()
+}

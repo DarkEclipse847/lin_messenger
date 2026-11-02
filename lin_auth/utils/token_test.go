@@ -93,3 +93,26 @@ func TestSigningKeyFailsClosed(t *testing.T) {
 		}
 	}
 }
+
+func TestRefreshTokenValidation(t *testing.T) {
+	t.Setenv("JWT_SECRET", testKey)
+	id := uuid.New()
+	for _, tc := range []struct {
+		purpose string
+		expiry  int64
+		valid   bool
+	}{
+		{"refresh", time.Now().Add(time.Hour).Unix(), true},
+		{"access", time.Now().Add(time.Hour).Unix(), false},
+		{"refresh", time.Now().Add(-time.Minute).Unix(), false},
+	} {
+		token, err := generateToken(id, tc.expiry, tc.purpose)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = ValidateRefreshToken(token)
+		if (err == nil) != tc.valid {
+			t.Fatal("incorrect refresh validation")
+		}
+	}
+}

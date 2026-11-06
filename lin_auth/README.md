@@ -91,9 +91,13 @@ The Rust consumer preserves this user ID in its own profile database. Passwords
 are excluded from serialization. Keep event field names and types compatible
 with `lin_server/src/controllers/models.rs`.
 
-Publishing failures are logged but do not abort registration; the database write,
+Publication retries the same payload up to three times using fresh connections,
+with five-second attempt deadlines and one/two-second backoff (20-second overall
+budget). Exhausted publishing failures are logged but do not abort registration; the database write,
 event publication, and session storage are not one transaction. A successful
 registration therefore does not guarantee that the server profile already exists.
+Retries do not survive an auth process crash or an outage beyond this window;
+a transactional outbox is still required for durable eventual delivery.
 
 ## Development
 
@@ -112,6 +116,8 @@ three backing services; verify registration, login, cookie/header validation,
 and rejection of missing, expired, or replaced tokens. Refresh/logout handler tests
 cover rotation, cookie clearing, and failures. Set `LIN_TEST_DATABASE_URL` to a
 disposable PostgreSQL database to exercise session persistence and rollback tests.
+Set `LIN_TEST_RABBITMQ_URL` to a disposable plain-AMQP broker to run the real
+connection-loss publication regression (it creates and deletes an isolated queue).
 
 ## Hardening changes and compatibility
 

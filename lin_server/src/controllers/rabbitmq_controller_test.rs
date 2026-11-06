@@ -34,3 +34,13 @@ fn registration_contract_requires_supported_operation_and_valid_identity() {
         assert!(registration_event(payload.as_bytes()).is_none());
     }
 }
+
+#[test]
+fn reconnect_backoff_is_capped() {
+    use std::time::Duration;
+    let mut delay = Duration::from_secs(1);
+    for expected in [2, 4, 8, 16, 30, 30, 30] {
+        delay = super::next_retry_delay(delay);
+        assert_eq!(delay, Duration::from_secs(expected));
+    }
+}

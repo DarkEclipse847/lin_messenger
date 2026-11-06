@@ -34,8 +34,48 @@ func rabbitSend(queueName string, user *models.User) error {
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
+	return retryRegistration(ctx, func(ctx context.Context) error {
+		return publishRegistration(ctx, queueName, msg)
+	}, waitRegistrationRetry)
+}
+
+// A lost confirmation may mean the event was delivered: retry the exact payload.
+// The consumer must remain idempotent. This is not a durable outbox.
+func retryRegistration(ctx context.Context, publish func(context.Context) error, wait func(context.Context, time.Duration) error) error {
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if attempt > 0 {
+			if err := wait(ctx, time.Second<<(attempt-1)); err != nil {
+				return err
+			}
+		}
+		attemptCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		err = publish(attemptCtx)
+		cancel()
+		if err == nil {
+			return nil
+		}
+	}
+	return err
+}
+
+func waitRegistrationRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func publishRegistration(ctx context.Context, queueName string, msg amqp.Publishing) error {
 	deadline, _ := ctx.Deadline()
 	conn, err := amqp.DialConfig(rabbitmqURL(), amqp.Config{
 		Dial: func(network, address string) (net.Conn, error) {

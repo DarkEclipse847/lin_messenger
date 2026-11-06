@@ -17,9 +17,9 @@ See the [server README](README.md) for the protocol, configuration, and test com
 - Each outgoing client queue is bounded to 64 entries. Closed or overloaded
   recipients are removed without blocking broadcasts, and empty rooms are removed.
 - Registration is acknowledged after persistence. Matching redeliveries are
-  idempotent; conflicting identities are rejected. Invalid events are rejected
+  idempotent; conflicting identities remain unacknowledged for reconciliation. Invalid events are rejected
   without requeue; persistence failures stop the consumer with the delivery
-  unacknowledged.
+  unacknowledged, then reconnect with capped exponential backoff.
 - SQL migrations are tracked and embedded in the binary. User IDs are UUIDs;
   chat/message IDs remain positive i64 values.
 
@@ -32,8 +32,8 @@ See the [server README](README.md) for the protocol, configuration, and test com
   acknowledgments, retry deduplication, or reconnect/resume protocol. A committed
   message may never reach a live recipient. Connection-local display names are
   freely chosen and are not verified identities. End-to-end encryption is absent.
-- **Registration recovery:** The consumer has no reconnect supervisor or readiness
-  signal. Auth publication is best effort. Dead-letter handling, monitored retries,
+- **Registration recovery:** The consumer reconnects, but has no readiness
+  signal. Auth publication is best effort after bounded retries. Dead-letter handling, monitored retries,
   an auth-owned outbox, and reconciliation remain needed.
 - **Resource limits:** The command queue, total session count, incoming command
   rate, and aggregate database work are not bounded. Database pooling/timeouts and

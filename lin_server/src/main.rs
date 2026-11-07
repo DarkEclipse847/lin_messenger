@@ -91,14 +91,7 @@ async fn main() -> io::Result<()> {
             .build()
             .expect("failed to build RabbitMQ runtime");
 
-        runtime.block_on(async {
-            let mut db_conn = database::db::establish_connection();
-            if let Err(err) =
-                rabbitmq_controller::rabbit_consumer(&mut db_conn, "REGISTRATION_REQ".into()).await
-            {
-                log::error!("RabbitMQ consumer stopped: {err:?}");
-            }
-        });
+        runtime.block_on(rabbitmq_controller::run_registration_consumer());
     });
 
     let http_server = HttpServer::new(move || {

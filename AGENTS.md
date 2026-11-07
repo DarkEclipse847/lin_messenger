@@ -117,8 +117,9 @@ unless dependencies were available and the flows were actually exercised.
 - Registration publishing remains best effort despite persistent messages and
   publisher confirms. The Rust consumer acknowledges successful persistence,
   accepts matching duplicate registrations, and rejects invalid events without
-  requeueing. Persistence failures stop the consumer with the delivery unacknowledged;
-  there is no automatic reconnect/retry loop. Do not assume reliable profile
+  requeueing. Auth retries publication up to three times within a 20-second budget.
+  Persistence failures close the consumer with the delivery unacknowledged;
+  it reconnects with fresh broker/database connections and capped backoff. Do not assume reliable profile
   synchronization or atomic registration across services.
 - Refresh/logout endpoints, end-to-end encryption, S3 attachment
   integration, and a functional messenger client are not implemented. Keep such

@@ -128,7 +128,14 @@ with the auth service's ID. A user must exist here before chat creation can
 satisfy the administrator foreign key.
 
 The consumer acknowledges successfully persisted deliveries and handles identical
-redeliveries idempotently, but does not reconnect after failures. Synchronization is incomplete. Messages store a generated positive i64 ID, chat ID,
+redeliveries idempotently. Broker connection failures, stream termination, and
+persistence failures restart the consumer with a fresh broker/database connection.
+Unacknowledged events are requeued when the connection closes; invalid payloads
+are rejected without requeueing. Reconnect backoff doubles from one second to a
+30-second cap and resets after a session lasting at least 60 seconds. Broker
+connection attempts time out after ten seconds. Conflicting profiles remain
+unacknowledged and require operator reconciliation. Auth publication is still
+best effort after its bounded retries; durable synchronization needs an outbox. Messages store a generated positive i64 ID, chat ID,
 authenticated sender UUID, UTC timestamp, and the broadcast text (including any
 connection-local `/name` prefix); attachment is NULL. Authorization and insertion
 share a transaction that locks the chat against concurrent membership changes.

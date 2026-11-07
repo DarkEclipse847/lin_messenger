@@ -25,7 +25,7 @@
 - [x] Add refresh/logout endpoints
 - [ ] Revoke active connections on logout
 - [ ] Set up HTTPS and browser Origin checks
-- [ ] Add registration retries and RabbitMQ reconnect
+- [x] Add registration retries and RabbitMQ reconnect
 - [ ] Add transactional outboxes for registration and chat events
 - [ ] Broadcast chat events across servers through RabbitMQ(one queue per instance)
 - [ ] Add message acknowledgments, retry deduplication and per-chat ordering

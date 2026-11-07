@@ -1,10 +1,12 @@
 use diesel::PgConnection;
+use diesel_migrations::MigrationHarness;
 use futures_util::StreamExt;
 use lapin::{
     Connection, ConnectionProperties, Error,
     options::*,
     types::{FieldTable, ShortString},
 };
+use std::time::{Duration, Instant};
 
 use crate::{controllers::models::UserRabbit, database::db::replicate_user};
 
@@ -41,11 +43,73 @@ pub async fn rabbit_connection() -> Result<Connection, Error> {
     Connection::connect(&rabbitmq_url(), ConnectionProperties::default()).await
 }
 
+// Runs on the dedicated consumer thread: synchronous Diesel never blocks HTTP workers.
+pub async fn run_registration_consumer() {
+    let mut delay = Duration::from_secs(1);
+    loop {
+        let started = Instant::now();
+        match crate::database::db::open_connection() {
+            Ok(mut db) => {
+                if db
+                    .run_pending_migrations(crate::database::db::MIGRATIONS)
+                    .is_ok()
+                {
+                    if rabbit_consumer(&mut db, "REGISTRATION_REQ".into())
+                        .await
+                        .is_err()
+                    {
+                        log::warn!("Registration broker connection or delivery failed");
+                    }
+                } else {
+                    log::error!("Registration database migration failed");
+                }
+            }
+            Err(_) => log::warn!("Registration database connection failed"),
+        }
+        // Reset only after a stable session, not merely a successful connection.
+        if started.elapsed() >= Duration::from_secs(60) {
+            delay = Duration::from_secs(1);
+        }
+        log::warn!(
+            "Registration consumer disconnected; retrying in {} seconds",
+            delay.as_secs()
+        );
+        tokio::time::sleep(delay).await;
+        delay = next_retry_delay(delay);
+    }
+}
+
+fn next_retry_delay(delay: Duration) -> Duration {
+    (delay * 2).min(Duration::from_secs(30))
+}
+
 pub async fn rabbit_consumer(
     db_conn: &mut PgConnection,
     queue_name: ShortString,
 ) -> Result<String, Error> {
-    let conn = rabbit_connection().await?;
+    let conn = tokio::time::timeout(Duration::from_secs(10), rabbit_connection())
+        .await
+        .map_err(|_| {
+            Error::from(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "broker connection timed out",
+            ))
+        })??;
+    let result = consume_registrations(db_conn, queue_name, &conn).await;
+    // Also close on stream errors/cancellation and failed acknowledgements.
+    let _ = tokio::time::timeout(
+        Duration::from_secs(5),
+        conn.close(200, "consumer restarting".into()),
+    )
+    .await;
+    result
+}
+
+async fn consume_registrations(
+    db_conn: &mut PgConnection,
+    queue_name: ShortString,
+    conn: &Connection,
+) -> Result<String, Error> {
     let channel = conn.create_channel().await?;
     log::info!("{:?}", conn.status());
 
@@ -84,8 +148,8 @@ pub async fn rabbit_consumer(
                         delivery.ack(BasicAckOptions::default()).await?;
                     }
                     Err(_) => {
-                        // Leave the delivery unacknowledged and stop; closing the channel
-                        // requeues it without a tight retry loop or silently losing it.
+                        // Explicitly close so unacknowledged deliveries are requeued
+                        // before the supervisor reconnects with a fresh database connection.
                         log::error!(
                             "Registration persistence failed; consumer stopped with delivery unacknowledged"
                         );
